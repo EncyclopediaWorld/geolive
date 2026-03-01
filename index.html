@@ -209,7 +209,7 @@ var weatherGrid=null,weatherCenter=null,marineGrid=null,tideData=null;
 var coastFeatures=null,rainPath=null,aqGrid=null,pollenData=null;
 var alertMarkers=null,alertData=[];
 var tempStats={min:0,max:35},windStats={min:0,max:40};
-var GRID=8,M_GRID=5,AQ_GRID=6;
+var GRID=8,M_GRID=15,AQ_GRID=6;
 var ERR_TILE='data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
 var _toastTimer=null,_loadCount=0;
 
@@ -290,7 +290,7 @@ function getNowHourIdx(){
   return findNowIdx(weatherGrid.data[0].hourly.time);
 }
 
-/* ===== MARINE GRID 5×5 ===== */
+/* ===== MARINE GRID ===== */
 async function fetchMarineGrid(){
   showToast('Loading marine data…');
   var b=map.getBounds(),s=b.getSouth(),n=b.getNorth(),w=b.getWest(),e=b.getEast();
@@ -303,7 +303,7 @@ async function fetchMarineGrid(){
   try{
     var resp=await fetch('https://marine-api.open-meteo.com/v1/marine?latitude='+aL.join(',')+'&longitude='+aO.join(',')+'&hourly=wave_height,wave_direction,wave_period&current=wave_height,wave_direction,wave_period&timezone=auto&forecast_days=1');
     var data=await resp.json();var arr=Array.isArray(data)?data:[data];
-    marineGrid={rows:R,cols:C,south:s,north:n,west:w,east:e,data:arr};
+    marineGrid={rows:R,cols:C,south:s,north:n,west:w,east:e,data:arr,lats:gLa,lons:gLo};
     // Set tideData to nearest valid point
     var bd=Infinity,bi=-1;
     for(var i=0;i<arr.length;i++){
@@ -316,8 +316,73 @@ async function fetchMarineGrid(){
     }
     tideData=(bi>=0)?arr[bi]:null;
     console.log('Marine grid:',R+'×'+C,', tideData:',tideData?'yes':'no');
+    // Generate coastline from marine grid if external coastline data failed
+    if(!coastFeatures)generateCoastFromGrid();
   }catch(e2){console.warn('Marine grid:',e2);}
   hideToast();
+}
+
+/* Generate coastline from marine grid ocean/land boundary (self-contained fallback) */
+function generateCoastFromGrid(){
+  if(!marineGrid)return;
+  var g=marineGrid,R=g.rows,C=g.cols;
+  var timeIdx=getMarineNowIdx();
+  // Build ocean mask
+  var ocean=[];
+  for(var r=0;r<R;r++){
+    ocean[r]=[];
+    for(var c=0;c<C;c++){
+      var di=r*C+c;var d=g.data[di];
+      ocean[r][c]=d&&d.hourly&&d.hourly.wave_height&&d.hourly.wave_height.some(function(v){return v!=null;});
+    }
+  }
+  // Find boundary edges between ocean and land
+  var edgePts=[];
+  function addEdge(r1,c1,r2,c2){
+    var lat=(g.lats[r1]+g.lats[r2])/2;
+    var lon=(g.lons[c1]+g.lons[c2])/2;
+    var oR=ocean[r1][c1]?r1:r2,oC=ocean[r1][c1]?c1:c2;
+    var di=oR*C+oC,wh=0;
+    if(g.data[di]&&g.data[di].hourly&&g.data[di].hourly.wave_height){
+      var wArr=g.data[di].hourly.wave_height;
+      wh=wArr[Math.min(timeIdx,wArr.length-1)]||0;
+    }
+    edgePts.push({lat:lat,lon:lon,wh:wh});
+  }
+  for(var r=0;r<R;r++)for(var c=0;c<C;c++){
+    if(c<C-1&&ocean[r][c]!==ocean[r][c+1])addEdge(r,c,r,c+1);
+    if(r<R-1&&ocean[r][c]!==ocean[r+1][c])addEdge(r,c,r+1,c);
+  }
+  if(edgePts.length<2){console.log('Coast grid: no boundary found');return;}
+  // Chain nearby points into line segments via nearest-neighbor
+  var used=new Array(edgePts.length).fill(false);
+  var features=[];
+  var latStep=g.lats.length>1?Math.abs(g.lats[1]-g.lats[0]):1;
+  var lonStep=g.lons.length>1?Math.abs(g.lons[1]-g.lons[0]):1;
+  var maxDistSq=Math.pow(latStep*2.8,2)+Math.pow(lonStep*2.8,2);
+  for(var start=0;start<edgePts.length;start++){
+    if(used[start])continue;
+    used[start]=true;
+    var chain=[edgePts[start]];
+    var searching=true;
+    while(searching){
+      searching=false;
+      var last=chain[chain.length-1],bestD=Infinity,bestI=-1;
+      for(var j=0;j<edgePts.length;j++){
+        if(used[j])continue;
+        var dx=edgePts[j].lat-last.lat,dy=edgePts[j].lon-last.lon,d=dx*dx+dy*dy;
+        if(d<bestD){bestD=d;bestI=j;}
+      }
+      if(bestI>=0&&bestD<maxDistSq){used[bestI]=true;chain.push(edgePts[bestI]);searching=true;}
+    }
+    if(chain.length>=2){
+      features.push({type:'Feature',geometry:{type:'LineString',coordinates:chain.map(function(p){return[p.lon,p.lat];})},properties:{waveHeights:chain.map(function(p){return p.wh;})}});
+    }
+  }
+  if(features.length>0){
+    coastFeatures={type:'FeatureCollection',features:features};
+    console.log('Coast from grid:',features.length,'segs,',edgePts.length,'pts');
+  }
 }
 
 function marineInterp(field,idx,lat,lon){
@@ -421,17 +486,38 @@ async function fetchRainViewer(){
 /* ===== COASTLINE ===== */
 async function fetchCoastline(){
   showToast('Loading coastlines…');
-  var urls=['https://cdn.jsdelivr.net/npm/world-atlas@2/coastline-110m.json','https://unpkg.com/world-atlas@2/coastline-110m.json'];
-  for(var i=0;i<urls.length;i++){
-    try{var r=await fetch(urls[i]);if(!r.ok)continue;var raw=await r.json();
+  // Strategy 1: GeoJSON from Natural Earth (no topojson lib needed)
+  var geoUrls=[
+    'https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_110m_coastline.geojson'
+  ];
+  for(var i=0;i<geoUrls.length;i++){
+    try{
+      var ctrl=new AbortController();var tid=setTimeout(function(){ctrl.abort();},12000);
+      var r=await fetch(geoUrls[i],{signal:ctrl.signal});clearTimeout(tid);
+      if(!r.ok)continue;var raw=await r.json();
+      if(raw.type==='FeatureCollection'){coastFeatures=raw;console.log('Coast GeoJSON:',coastFeatures.features.length,'from',geoUrls[i]);hideToast();return;}
+    }catch(e){console.warn('Coast GeoJSON',i,e);}
+  }
+  // Strategy 2: TopoJSON from CDNs (needs topojson lib or manual decode)
+  var topoUrls=[
+    'https://cdn.jsdelivr.net/npm/world-atlas@2/coastline-110m.json',
+    'https://unpkg.com/world-atlas@2/coastline-110m.json',
+    'https://cdn.jsdelivr.net/npm/world-atlas@2/coastline-50m.json',
+    'https://registry.npmmirror.com/world-atlas/2.0.2/files/coastline-110m.json'
+  ];
+  for(var i=0;i<topoUrls.length;i++){
+    try{
+      var ctrl=new AbortController();var tid=setTimeout(function(){ctrl.abort();},10000);
+      var r=await fetch(topoUrls[i],{signal:ctrl.signal});clearTimeout(tid);
+      if(!r.ok)continue;var raw=await r.json();
       if(raw.type==='Topology'&&raw.objects){
-        if(typeof topojson!=='undefined'){var k=Object.keys(raw.objects)[0];coastFeatures=topojson.feature(raw,raw.objects[k]);console.log('Coast:',coastFeatures.features.length);hideToast();return;}
+        if(typeof topojson!=='undefined'){var k=Object.keys(raw.objects)[0];coastFeatures=topojson.feature(raw,raw.objects[k]);console.log('Coast TopoJSON:',coastFeatures.features.length,'from',topoUrls[i]);hideToast();return;}
         coastFeatures=decodeTopo(raw);if(coastFeatures){console.log('Coast(manual):',coastFeatures.features.length);hideToast();return;}
       }
       if(raw.type==='FeatureCollection'){coastFeatures=raw;hideToast();return;}
-    }catch(e){console.warn('Coast',i,e);}
+    }catch(e){console.warn('Coast Topo',i,e);}
   }
-  console.warn('Coast: all sources failed');hideToast();
+  console.warn('Coast: all sources failed, will use marine grid fallback');hideToast();
 }
 function decodeTopo(topo){
   try{var k=Object.keys(topo.objects)[0],obj=topo.objects[k],arcs=topo.arcs,tf=topo.transform;
@@ -558,168 +644,168 @@ function drawDrought(ctx,c,m){if(!weatherGrid)return;var idx=getNowHourIdx();var
 function aqColor(v){if(v==null)return[0,0,0,0];if(v<=25)return[52,211,153,35];if(v<=50)return[52,211,153,50];if(v<=75)return[251,191,36,50];if(v<=100)return[251,191,36,65];if(v<=150)return[249,115,22,65];if(v<=200)return[239,68,68,75];return[168,85,247,80];}
 function drawAQ(ctx,c,m){if(!aqGrid)return;var idx=0;if(aqGrid.data[0]&&aqGrid.data[0].hourly&&aqGrid.data[0].hourly.time)idx=findNowIdx(aqGrid.data[0].hourly.time);renderHiRes(ctx,c,m,function(lat,lon){return aqColor(aqInterp('us_aqi',idx,lat,lon));});}
 
-/* ===== DRAW: TIDE — geomap-10 style (teal animated waves) + MIN/MAX/HERE markers ===== */
+/* ===== DRAW: TIDE — blue coastline, brightness = wave height, mini range bars ===== */
 
 function drawTideFrame(ctx,c,m){
-  if(!coastFeatures||!coastFeatures.features||!coastFeatures.features.length){
-    if(tideData&&tideData.current){
-      ctx.save();ctx.font='bold 13px "JetBrains Mono",monospace';ctx.fillStyle='rgba(56,189,248,.4)';ctx.textAlign='center';
-      ctx.fillText('Wave: '+(tideData.current.wave_height||0).toFixed(1)+'m — Loading coastline…',c.width/2,c.height/2);ctx.restore();}
-    return;
-  }
+  if(!coastFeatures||!coastFeatures.features||!coastFeatures.features.length)return;
 
   var timeIdx=getMarineNowIdx();
-  var t=Date.now()/1000;
   var bounds=m.getBounds();
-  var pL=(bounds.getNorth()-bounds.getSouth())*.05,pO=(bounds.getEast()-bounds.getWest())*.05;
-  var sth=bounds.getSouth()-pL,nth=bounds.getNorth()+pL,wst=bounds.getWest()-pO,est=bounds.getEast()+pO;
+  var padLat=(bounds.getNorth()-bounds.getSouth())*.08;
+  var padLon=(bounds.getEast()-bounds.getWest())*.08;
+  var sth=bounds.getSouth()-padLat,nth=bounds.getNorth()+padLat;
+  var wst=bounds.getWest()-padLon,est=bounds.getEast()+padLon;
 
-  // Read wave period for animation speed
-  var wavePer=6;
-  if(tideData&&tideData.current&&tideData.current.wave_period){wavePer=tideData.current.wave_period||6;}
+  /* --- Scan marine grid for min/max wave height --- */
+  var wMin=Infinity,wMax=-Infinity;
+  if(marineGrid){
+    for(var i=0;i<marineGrid.data.length;i++){
+      var d=marineGrid.data[i];
+      if(!d||!d.hourly||!d.hourly.wave_height)continue;
+      var wh=d.hourly.wave_height[Math.min(timeIdx,d.hourly.wave_height.length-1)];
+      if(wh!=null&&wh>=0){if(wh<wMin)wMin=wh;if(wh>wMax)wMax=wh;}
+    }
+  }
+  if(!isFinite(wMin)||wMin>=wMax){wMin=0;wMax=2;}
 
-  // ── Phase 1: collect segments + track global min/max/nearest ──
-  var allSegs=[],gMin=999,gMax=0,gMinPt=null,gMaxPt=null,gMinWh=0,gMaxWh=0;
-  var nearestPt=null,nearestDist=Infinity,nearestWh=0,nearestNm=[0,-1];
-  var userPx=m.latLngToContainerPoint([userLat,userLon]);
-
+  /* --- Draw each coastline feature --- */
   for(var fi=0;fi<coastFeatures.features.length;fi++){
     var geom=coastFeatures.features[fi].geometry;if(!geom)continue;
-    var coordSets=geom.type==='MultiLineString'?geom.coordinates:(geom.type==='LineString'?[geom.coordinates]:(geom.type==='Polygon'?geom.coordinates:[]));
+    var coordSets=geom.type==='MultiLineString'?geom.coordinates
+      :(geom.type==='LineString'?[geom.coordinates]
+      :(geom.type==='Polygon'?geom.coordinates:[]));
+
     for(var si=0;si<coordSets.length;si++){
-      var coords=coordSets[si],seg={pts:[],whs:[],dists:[0]};
+      var coords=coordSets[si];
+      var seg={pts:[],whs:[],has:[],dists:[0]};
+
       for(var ci=0;ci<coords.length;ci++){
         var cLon=coords[ci][0],cLat=coords[ci][1];
         if(cLat<sth||cLat>nth||cLon<wst||cLon>est){
-          if(seg.pts.length>1)allSegs.push(seg);
-          seg={pts:[],whs:[],dists:[0]};continue;
+          if(seg.pts.length>1)_drawCoastSeg(ctx,m,seg,wMin,wMax);
+          seg={pts:[],whs:[],has:[],dists:[0]};continue;
         }
         var pt=m.latLngToContainerPoint([cLat,cLon]);
         var wh=marineInterp('wave_height',timeIdx,cLat,cLon);
-        if(wh==null&&tideData&&tideData.current)wh=tideData.current.wave_height||0;
-        if(wh==null)wh=0;
+        var hasD=wh!=null;
         if(seg.pts.length>0){
           var prev=seg.pts[seg.pts.length-1];
           seg.dists.push(seg.dists[seg.dists.length-1]+Math.sqrt((pt.x-prev.x)*(pt.x-prev.x)+(pt.y-prev.y)*(pt.y-prev.y)));
         }
-        seg.pts.push(pt);seg.whs.push(wh);
-        if(wh<gMin){gMin=wh;gMinPt=pt;gMinWh=wh;}
-        if(wh>gMax){gMax=wh;gMaxPt=pt;gMaxWh=wh;}
-        var ud=(pt.x-userPx.x)*(pt.x-userPx.x)+(pt.y-userPx.y)*(pt.y-userPx.y);
-        if(ud<nearestDist){nearestDist=ud;nearestPt=pt;nearestWh=wh;nearestNm=tideNrm(seg.pts,seg.pts.length-1);}
+        seg.pts.push(pt);seg.whs.push(hasD?wh:0);seg.has.push(hasD);
       }
-      if(seg.pts.length>1)allSegs.push(seg);
+      if(seg.pts.length>1)_drawCoastSeg(ctx,m,seg,wMin,wMax);
     }
   }
-  if(allSegs.length===0)return;
-  var maxWave=4; // normalization reference (0-4m)
+}
 
-  // ── Phase 2: draw each segment in geomap-10 style ──
-  for(var si=0;si<allSegs.length;si++){
-    var seg=allSegs[si],pts=seg.pts,whs=seg.whs,dists=seg.dists;
-    var totalLen=dists[dists.length-1];if(totalLen<4)continue;
+/* --- Draw a single coastline segment --- */
+function _drawCoastSeg(ctx,m,seg,wMin,wMax){
+  var pts=seg.pts,whs=seg.whs,has=seg.has,dists=seg.dists;
+  if(dists[dists.length-1]<2)return;
+  var range=wMax-wMin;if(range<=0)range=1;
 
-    // A) Animated wave dots — 3 passes per point (the signature geomap-10 effect)
-    for(var i=0;i<pts.length;i++){
-      var wh=whs[i];
-      var norm=Math.min(1,wh/maxWave);
-      var reach=8+norm*35;
-      var nm=tideNrm(pts,i);
-      var r=Math.round(14+norm*40),g=Math.round(100+norm*80),b2=Math.round(180+norm*60);
+  /* Helper: wave height → blue brightness (0 = dim, 1 = bright) */
+  function tNorm(wh){return Math.max(0,Math.min(1,(wh-wMin)/range));}
 
-      for(var pass=0;pass<3;pass++){
-        var off=reach*(0.3+pass*0.35);
-        var phase=dists[i]*0.05+t/wavePer*2+pass*0.7;
-        var osc=Math.sin(phase)*(2+norm*10)+Math.sin(phase*2.3+t*.5)*1.5;
-        var px=pts[i].x+nm[0]*(off+osc);
-        var py=pts[i].y+nm[1]*(off+osc);
-        ctx.beginPath();ctx.arc(px,py,1.5+norm*2,0,Math.PI*2);
-        ctx.fillStyle='rgba('+r+','+g+','+b2+','+(0.08+pass*0.04+norm*0.08)+')';
-        ctx.fill();
-      }
-    }
-
-    // B) Coastline stroke — teal tones colored by wave height
-    for(var i=0;i<pts.length-1;i++){
-      var wh=(whs[i]+whs[i+1])/2;
-      var norm=Math.min(1,wh/maxWave);
-      ctx.beginPath();ctx.moveTo(pts[i].x,pts[i].y);ctx.lineTo(pts[i+1].x,pts[i+1].y);
-      var cr=Math.round(40+norm*200),cg=Math.round(180+norm*55),cb=Math.round(200+norm*55);
-      ctx.strokeStyle='rgba('+cr+','+cg+','+cb+','+(0.3+norm*0.5)+')';
-      ctx.lineWidth=1.5+norm*2;ctx.lineCap='round';ctx.stroke();
-    }
-
-    // C) Wave crest animation lines — flowing white lines
-    for(var w=0;w<2;w++){
-      ctx.beginPath();
-      for(var i=0;i<pts.length;i++){
-        var wh=whs[i];var norm=Math.min(1,wh/maxWave);
-        var nm=tideNrm(pts,i);
-        var off=(8+norm*30)*(0.4+w*0.35);
-        var phase=dists[i]*0.05+t/6*2.5+w*1.2;
-        var osc=Math.sin(phase)*(2+norm*8);
-        var px=pts[i].x+nm[0]*(off+osc),py=pts[i].y+nm[1]*(off+osc);
-        i===0?ctx.moveTo(px,py):ctx.lineTo(px,py);
-      }
-      ctx.strokeStyle='rgba(200,240,255,'+(0.12+w*0.06)+')';
-      ctx.lineWidth=1;ctx.lineCap='round';ctx.stroke();
-    }
-
-    // D) Height labels every ~300px
-    var nextLabel=150;
-    for(var i=1;i<pts.length;i++){
-      if(dists[i]<nextLabel)continue;
-      var wh=whs[i];var norm=Math.min(1,wh/maxWave);
-      var nm=tideNrm(pts,i);
-      var lx=pts[i].x+nm[0]*(15+norm*35+16),ly=pts[i].y+nm[1]*(15+norm*35+16);
-      var label=wh.toFixed(1)+'m';
-      ctx.save();ctx.font='bold 9px "JetBrains Mono",monospace';
-      var tw=ctx.measureText(label).width+8;
-      ctx.fillStyle='rgba(0,15,40,0.7)';
-      ctx.beginPath();
-      if(ctx.roundRect)ctx.roundRect(lx-tw/2,ly-8,tw,16,4);else ctx.rect(lx-tw/2,ly-8,tw,16);
-      ctx.fill();
-      ctx.fillStyle=wh>2?'rgba(56,189,248,0.95)':wh>0.8?'rgba(120,200,230,0.85)':'rgba(100,170,200,0.75)';
-      ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(label,lx,ly);
-      ctx.restore();nextLabel=dists[i]+300;
-    }
+  /* A) Outer soft glow — only where data exists */
+  for(var i=0;i<pts.length-1;i++){
+    if(!has[i]&&!has[i+1])continue;
+    var wh=(has[i]?whs[i]:whs[i+1]);if(has[i]&&has[i+1])wh=(whs[i]+whs[i+1])/2;
+    var t=tNorm(wh);
+    ctx.beginPath();ctx.moveTo(pts[i].x,pts[i].y);ctx.lineTo(pts[i+1].x,pts[i+1].y);
+    ctx.strokeStyle='rgba(30,120,220,'+(0.06+t*0.14)+')';
+    ctx.lineWidth=14+t*8;ctx.lineCap='round';ctx.stroke();
   }
 
-  // ── Phase 3: prominent MIN / MAX / HERE callout markers ──
-  // These are drawn LAST so they appear on top of everything
+  /* B) Core coastline stroke */
+  for(var i=0;i<pts.length-1;i++){
+    var hasD=has[i]||has[i+1];
+    ctx.beginPath();ctx.moveTo(pts[i].x,pts[i].y);ctx.lineTo(pts[i+1].x,pts[i+1].y);
+    ctx.lineCap='round';
 
-  if(gMinPt){
-    var nm=findBestNormal(allSegs,gMinPt);
-    var lx=gMinPt.x+nm[0]*55,ly=gMinPt.y+nm[1]*55;
-    // Dashed connector line
-    ctx.save();ctx.beginPath();ctx.moveTo(gMinPt.x,gMinPt.y);ctx.lineTo(lx,ly);
-    ctx.strokeStyle='rgba(100,200,180,.45)';ctx.lineWidth=1;ctx.setLineDash([4,4]);ctx.stroke();ctx.setLineDash([]);ctx.restore();
-    // Dot on coastline
-    ctx.beginPath();ctx.arc(gMinPt.x,gMinPt.y,5,0,Math.PI*2);
-    ctx.fillStyle='rgba(52,211,153,.9)';ctx.fill();ctx.strokeStyle='#fff';ctx.lineWidth=1.5;ctx.stroke();
-    // Label pill
-    drawTideCallout(ctx,lx,ly,'▼ LOW  '+gMinWh.toFixed(1)+'m','rgba(10,50,35,.88)','rgba(52,211,153,.65)','rgba(52,211,153,1)');
+    if(hasD){
+      var wh=(has[i]?whs[i]:whs[i+1]);if(has[i]&&has[i+1])wh=(whs[i]+whs[i+1])/2;
+      var t=tNorm(wh);
+      // Interpolate: dim navy → bright cyan
+      var r=Math.round(15+t*40);   // 15→55
+      var g=Math.round(50+t*150);  // 50→200
+      var b=Math.round(120+t*128); // 120→248
+      var a=0.35+t*0.65;           // 0.35→1.0
+      ctx.strokeStyle='rgba('+r+','+g+','+b+','+a.toFixed(2)+')';
+      ctx.lineWidth=3+t*3;
+    }else{
+      // No marine data: subtle dim blue
+      ctx.strokeStyle='rgba(30,70,140,0.22)';
+      ctx.lineWidth=2;
+    }
+    ctx.stroke();
   }
 
-  if(gMaxPt){
-    var nm=findBestNormal(allSegs,gMaxPt);
-    var lx=gMaxPt.x+nm[0]*55,ly=gMaxPt.y+nm[1]*55;
-    ctx.save();ctx.beginPath();ctx.moveTo(gMaxPt.x,gMaxPt.y);ctx.lineTo(lx,ly);
-    ctx.strokeStyle='rgba(248,150,100,.45)';ctx.lineWidth=1;ctx.setLineDash([4,4]);ctx.stroke();ctx.setLineDash([]);ctx.restore();
-    ctx.beginPath();ctx.arc(gMaxPt.x,gMaxPt.y,5,0,Math.PI*2);
-    ctx.fillStyle='rgba(239,68,68,.9)';ctx.fill();ctx.strokeStyle='#fff';ctx.lineWidth=1.5;ctx.stroke();
-    drawTideCallout(ctx,lx,ly,'▲ HIGH  '+gMaxWh.toFixed(1)+'m','rgba(60,15,10,.88)','rgba(239,68,68,.6)','rgba(248,150,100,1)');
+  /* C) Mini range bars every ~200px (only where data exists) */
+  var nextBar=120;
+  for(var i=0;i<pts.length;i++){
+    if(dists[i]<nextBar||!has[i])continue;
+    var t=tNorm(whs[i]);
+    var nm=tideNrm(pts,i);
+    var bx=pts[i].x+nm[0]*18,by=pts[i].y+nm[1]*18;
+    _drawRangeBar(ctx,bx,by,t,whs[i],wMin,wMax);
+    nextBar=dists[i]+200;
   }
+}
 
-  if(nearestPt&&nearestDist<200*200){
-    var nm=findBestNormal(allSegs,nearestPt);
-    var lx=nearestPt.x-nm[0]*55,ly=nearestPt.y-nm[1]*55;
-    ctx.save();ctx.beginPath();ctx.moveTo(nearestPt.x,nearestPt.y);ctx.lineTo(lx,ly);
-    ctx.strokeStyle='rgba(56,189,248,.4)';ctx.lineWidth=1;ctx.setLineDash([4,4]);ctx.stroke();ctx.setLineDash([]);ctx.restore();
-    ctx.beginPath();ctx.arc(nearestPt.x,nearestPt.y,5,0,Math.PI*2);
-    ctx.fillStyle='rgba(56,189,248,.9)';ctx.fill();ctx.strokeStyle='#fff';ctx.lineWidth=1.5;ctx.stroke();
-    drawTideCallout(ctx,lx,ly,'📍 HERE  '+nearestWh.toFixed(1)+'m','rgba(10,25,55,.88)','rgba(56,189,248,.55)','rgba(56,189,248,1)');
-  }
+/* --- Mini vertical range bar --- */
+function _drawRangeBar(ctx,x,y,t,wh,wMin,wMax){
+  var bW=5,bH=28;
+  var left=x-bW/2,top=y-bH/2;
+  ctx.save();
+
+  // Dark background pill
+  ctx.shadowColor='rgba(0,0,0,.5)';ctx.shadowBlur=4;ctx.shadowOffsetY=1;
+  ctx.fillStyle='rgba(4,12,30,0.85)';
+  ctx.beginPath();
+  if(ctx.roundRect)ctx.roundRect(left-3,top-12,bW+6,bH+24,5);
+  else ctx.rect(left-3,top-12,bW+6,bH+24);
+  ctx.fill();ctx.shadowColor='transparent';
+
+  // Gradient bar (dark blue at bottom → bright cyan at top)
+  var grad=ctx.createLinearGradient(x,top+bH,x,top);
+  grad.addColorStop(0,'rgba(15,40,100,0.6)');
+  grad.addColorStop(0.5,'rgba(30,120,200,0.8)');
+  grad.addColorStop(1,'rgba(56,200,255,1)');
+  ctx.fillStyle=grad;
+  ctx.beginPath();
+  if(ctx.roundRect)ctx.roundRect(left,top,bW,bH,2);
+  else ctx.rect(left,top,bW,bH);
+  ctx.fill();
+
+  // Border
+  ctx.strokeStyle='rgba(56,189,248,0.3)';ctx.lineWidth=0.5;ctx.stroke();
+
+  // Current value marker — white horizontal tick
+  var mY=top+bH*(1-t);
+  ctx.beginPath();ctx.moveTo(left-2,mY);ctx.lineTo(left+bW+2,mY);
+  ctx.strokeStyle='#fff';ctx.lineWidth=2;ctx.lineCap='round';ctx.stroke();
+
+  // Small white dot
+  ctx.beginPath();ctx.arc(x,mY,2.5,0,Math.PI*2);
+  ctx.fillStyle='#fff';ctx.fill();
+
+  // Value label (right of bar)
+  ctx.font='bold 9px "JetBrains Mono",monospace';
+  ctx.fillStyle='rgba(180,220,255,0.95)';
+  ctx.textAlign='center';ctx.textBaseline='bottom';
+  ctx.fillText(wh.toFixed(1)+'m',x,top-3);
+
+  // Min/max labels
+  ctx.font='7px "JetBrains Mono",monospace';
+  ctx.fillStyle='rgba(100,160,220,0.5)';
+  ctx.textBaseline='top';
+  ctx.fillText(wMin.toFixed(1),x,top+bH+2);
+  ctx.textBaseline='bottom';
+  ctx.fillText(wMax.toFixed(1),x,top-11);
+
+  ctx.restore();
 }
 
 function drawTideCallout(ctx,x,y,text,bgColor,borderColor,textColor){
@@ -809,7 +895,7 @@ function updateLegend(){
   if(activeLayers.has('temperature')){show=true;html+='<h4>Temperature</h4><div class="legend-gradient" style="background:linear-gradient(to right,#1428b4,#3b82f6,#22d3ee,#34d399,#facc15,#f97316,#ef4444)"></div><div class="legend-labels"><span>-10°C</span><span>35+</span></div>';}
   if(activeLayers.has('drought')){show=true;html+='<h4 style="margin-top:8px">Soil Moisture</h4><div class="legend-gradient" style="background:linear-gradient(to right,#b43214,#dca028,#8cb450,#2864c8)"></div><div class="legend-labels"><span>Drought</span><span>Wet</span></div>';}
   if(activeLayers.has('airquality')){show=true;html+='<h4 style="margin-top:8px">AQI</h4><div style="display:flex;gap:2px;margin:3px 0"><div style="flex:1;height:6px;border-radius:2px;background:#34d399"></div><div style="flex:1;height:6px;border-radius:2px;background:#fbbf24"></div><div style="flex:1;height:6px;border-radius:2px;background:#f97316"></div><div style="flex:1;height:6px;border-radius:2px;background:#ef4444"></div><div style="flex:1;height:6px;border-radius:2px;background:#a855f7"></div></div><div class="legend-labels"><span>Good</span><span>Hazardous</span></div>';}
-  if(activeLayers.has('tide')){show=true;html+='<h4 style="margin-top:8px">Wave Height</h4><div class="legend-gradient" style="background:linear-gradient(to right,rgba(100,170,200,.5),rgba(56,189,248,.9))"></div><div class="legend-labels"><span>Calm</span><span>Rough</span></div><div style="margin-top:6px;font-size:9px;line-height:1.6"><span style="color:#34d399">▼ LOW</span> calmest point<br><span style="color:#f87171">▲ HIGH</span> roughest point<br><span style="color:#38bdf8">📍 HERE</span> nearest to you</div><div class="legend-src">Marine 5×5 · Open-Meteo</div>';}
+  if(activeLayers.has('tide')){show=true;html+='<h4 style="margin-top:8px">Tide · Wave Height</h4><div class="legend-gradient" style="background:linear-gradient(to right,rgba(15,50,120,0.4),rgba(30,120,200,0.7),rgba(56,200,255,1))"></div><div class="legend-labels"><span>Low</span><span>High</span></div><div style="margin-top:5px;display:flex;align-items:center;gap:6px"><div style="width:4px;height:18px;border-radius:2px;background:linear-gradient(to top,rgba(15,40,100,.6),rgba(56,200,255,1));position:relative"><div style="position:absolute;left:-2px;width:8px;height:2px;background:#fff;border-radius:1px;top:30%"></div></div><span style="font-size:8px;color:var(--text3)">Range bar shows position<br>in local min–max range</span></div><div style="margin-top:3px;font-size:8px;color:var(--text3)"><span style="color:rgba(30,70,140,0.5)">━━</span> No data (dim)<br><span style="color:rgba(56,200,255,1)">━━</span> Data coverage area</div><div class="legend-src">Open-Meteo Marine</div>';}
   if(activeLayers.has('sst')){show=true;html+='<h4 style="margin-top:8px">Sea Temp</h4><div class="legend-gradient" style="background:linear-gradient(to right,#1e3a8a,#22d3ee,#facc15,#ef4444)"></div><div class="legend-labels"><span>Cold</span><span>Warm</span></div><div class="legend-src">GHRSST MUR GIBS</div>';}
   if(activeLayers.has('seamark')){show=true;html+='<h4 style="margin-top:8px">Sea Marks</h4><div class="legend-src">OpenSeaMap — zoom 9+</div>';}
   if(activeLayers.has('fire')){show=true;html+='<h4 style="margin-top:8px">Fires</h4><div class="legend-item"><div class="legend-color" style="background:#ff4500"></div><span>Thermal anomaly</span></div>';}
@@ -877,12 +963,16 @@ function toggleLayer(el,name){
 
   if(name==='tide'){
     if(on){
-      if(!canvasLayers.tide)canvasLayers.tide=new AnimOverlay(drawTideFrame);
+      if(!canvasLayers.tide)canvasLayers.tide=new CanvasOverlay(drawTideFrame);
       canvasLayers.tide.addTo(map);
       var proms=[];
       if(!marineGrid)proms.push(fetchMarineGrid());
       if(!coastFeatures)proms.push(fetchCoastline());
-      if(proms.length)Promise.allSettled(proms);
+      if(proms.length)Promise.allSettled(proms).then(function(){
+        if(!coastFeatures&&marineGrid)generateCoastFromGrid();
+        if(canvasLayers.tide&&canvasLayers.tide._map)canvasLayers.tide.redraw();
+        renderInfoPanel();updateLegend();
+      });
     }else if(canvasLayers.tide)try{map.removeLayer(canvasLayers.tide);}catch(e){}
   }
 
@@ -897,6 +987,7 @@ function refreshAll(){
   renderInfoPanel();
   ['temperature','wind','drought'].forEach(function(k){if(canvasLayers[k]&&canvasLayers[k]._map)canvasLayers[k].redraw();});
   if(canvasLayers.aq&&canvasLayers.aq._map)canvasLayers.aq.redraw();
+  if(canvasLayers.tide&&canvasLayers.tide._map)canvasLayers.tide.redraw();
   updateLegend();
 }
 var _refetchTimer=null;
@@ -907,7 +998,10 @@ function scheduleRefetch(){
     _needsWeatherGrid.forEach(function(k){if(activeLayers.has(k))any=true;});
     if(any)await fetchWeatherGrid();
     if(activeLayers.has('airquality'))fetchAQGrid().then(function(){if(canvasLayers.aq&&canvasLayers.aq._map)canvasLayers.aq.redraw();});
-    if(activeLayers.has('tide'))fetchMarineGrid();
+    if(activeLayers.has('tide'))fetchMarineGrid().then(function(){
+      if(!coastFeatures&&marineGrid)generateCoastFromGrid();
+      if(canvasLayers.tide&&canvasLayers.tide._map)canvasLayers.tide.redraw();
+    });
     refreshAll();
   },2500);
 }
@@ -959,10 +1053,21 @@ async function init(){
 /* ===== TOPOJSON BOOT ===== */
 (function(){
   if(typeof topojson!=='undefined'){init();return;}
-  var s=document.createElement('script');
-  s.src='https://cdn.jsdelivr.net/npm/topojson-client@3/dist/topojson-client.min.js';
-  s.onload=init;s.onerror=function(){console.warn('topojson lib failed');init();};
-  document.head.appendChild(s);
+  var urls=[
+    'https://cdnjs.cloudflare.com/ajax/libs/topojson/3.0.2/topojson.min.js',
+    'https://cdn.jsdelivr.net/npm/topojson-client@3/dist/topojson-client.min.js',
+    'https://registry.npmmirror.com/topojson-client/3.1.0/files/dist/topojson-client.min.js'
+  ];
+  var idx=0;
+  function tryNext(){
+    if(idx>=urls.length||typeof topojson!=='undefined'){init();return;}
+    var s=document.createElement('script');
+    s.src=urls[idx++];
+    s.onload=function(){init();};
+    s.onerror=function(){console.warn('topojson CDN',idx-1,'failed');tryNext();};
+    document.head.appendChild(s);
+  }
+  tryNext();
 })();
 </script>
 </body>
