@@ -22,7 +22,7 @@ GeoLive transforms your browser into a real-time geographic intelligence command
 
 Ever wished you could glance at one screen and instantly see the temperature, wind, rain, waves, air quality, wildfires, droughts, and population density of **any place on Earth** — all at once, all in real time?
 
-That's GeoLive. It pulls from **12+ live public APIs** and renders **17 toggleable data layers** onto a gorgeous dark-mode map, complete with adaptive canvas overlays, interpolated grids, and smooth glassmorphism UI. And it does it all in a **single self-contained HTML file** weighing under 80 KB.
+That's GeoLive. It pulls from **12+ live public APIs** and renders **17 toggleable data layers** onto a gorgeous dark-mode map, complete with adaptive canvas overlays, interpolated grids, and smooth glassmorphism UI.
 
 ---
 
