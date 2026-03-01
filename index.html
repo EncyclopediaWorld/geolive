@@ -160,13 +160,13 @@ html,body{height:100%;overflow:hidden;font-family:'DM Sans',sans-serif;backgroun
 
       <div class="layer-group"><div class="layer-group-title">Air &amp; Health</div>
         <div class="layer-card" data-layer="airquality" onclick="toggleLayer(this,'airquality')"><div class="layer-icon">😷</div><div class="layer-info"><div class="layer-name">Air Quality</div><div class="layer-desc">PM2.5 heatmap grid</div></div><div class="layer-toggle"></div></div>
-        <div class="layer-card" data-layer="pollen" onclick="toggleLayer(this,'pollen')"><div class="layer-icon">🌸</div><div class="layer-info"><div class="layer-name">Pollen Index</div><div class="layer-desc">Grass, birch, ragweed</div></div><div class="layer-toggle"></div></div>
+        
       </div>
 
       <div class="layer-group"><div class="layer-group-title">Ocean &amp; Marine</div>
         <div class="layer-card" data-layer="tide" onclick="toggleLayer(this,'tide')"><div class="layer-icon">🌊</div><div class="layer-info"><div class="layer-name">Tides &amp; Waves</div><div class="layer-desc">Per-point coastal data</div></div><div class="layer-toggle"></div></div>
         <div class="layer-card" data-layer="sst" onclick="toggleLayer(this,'sst')"><div class="layer-icon">🌡️</div><div class="layer-info"><div class="layer-name">Sea Temperature</div><div class="layer-desc">GHRSST / GIBS SST</div></div><div class="layer-toggle"></div></div>
-        <div class="layer-card" data-layer="seamark" onclick="toggleLayer(this,'seamark')"><div class="layer-icon">⚓</div><div class="layer-info"><div class="layer-name">Sea Marks</div><div class="layer-desc">OpenSeaMap (zoom 9+)</div></div><div class="layer-toggle"></div></div>
+        <div class="layer-card" data-layer="seamark" onclick="toggleLayer(this,'seamark')"><div class="layer-icon">⚓</div><div class="layer-info"><div class="layer-name">Sea Marks</div><div class="layer-desc">Maritime boundaries & nav marks</div></div><div class="layer-toggle"></div></div>
       </div>
 
       <div class="layer-group"><div class="layer-group-title">Land &amp; Ecology</div>
@@ -206,19 +206,22 @@ var map,userLat=30.25,userLon=120.16;
 var activeLayers=new Set(['precipitation']);
 var ML={},canvasLayers={};
 var weatherGrid=null,weatherCenter=null,marineGrid=null,tideData=null;
-var coastFeatures=null,rainPath=null,aqGrid=null,pollenData=null;
+var coastFeatures=null,rainPath=null,aqGrid=null;
 var alertMarkers=null,alertData=[];
 var tempStats={min:0,max:35},windStats={min:0,max:40};
-var GRID=8,M_GRID=15,AQ_GRID=6;
+var GRID=16,M_GRID=15,AQ_GRID=8;
 var ERR_TILE='data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
 var _toastTimer=null,_loadCount=0;
 
 /* ===== TOAST ===== */
-function showToast(msg){
+function showToast(msg,autoDismissMs){
   _loadCount++;
   document.getElementById('toast-msg').textContent=msg;
   document.getElementById('toast').classList.add('show');
   if(_toastTimer)clearTimeout(_toastTimer);
+  if(autoDismissMs){
+    _toastTimer=setTimeout(function(){_loadCount=0;document.getElementById('toast').classList.remove('show');},autoDismissMs);
+  }
 }
 function hideToast(){
   _loadCount=Math.max(0,_loadCount-1);
@@ -263,14 +266,24 @@ async function fetchWeatherGrid(){
   showToast('Loading weather grid…');
   var b=map.getBounds(),s=b.getSouth(),n=b.getNorth(),w=b.getWest(),e=b.getEast();
   var pad=.12,lp=(n-s)*pad,op=(e-w)*pad;s-=lp;n+=lp;w-=op;e+=op;
-  var R=GRID,C=GRID,aL=[],aO=[],gLa=[],gLo=[];
+  var R=GRID,C=GRID,gLa=[],gLo=[];
   for(var r=0;r<R;r++)gLa.push(s+(n-s)*r/(R-1));
   for(var c=0;c<C;c++)gLo.push(w+(e-w)*c/(C-1));
-  for(var r=0;r<R;r++)for(var c=0;c<C;c++){aL.push(gLa[r].toFixed(2));aO.push(gLo[c].toFixed(2));}
+  // Build all coordinate pairs
+  var allLats=[],allLons=[];
+  for(var r=0;r<R;r++)for(var c=0;c<C;c++){allLats.push(gLa[r].toFixed(2));allLons.push(gLo[c].toFixed(2));}
+  var params='&hourly=temperature_2m,relative_humidity_2m,wind_speed_10m,wind_direction_10m,soil_moisture_0_to_7cm,soil_moisture_7_to_28cm&models=best_match&timezone=auto&forecast_days=1';
   try{
-    var resp=await fetch('https://api.open-meteo.com/v1/forecast?latitude='+aL.join(',')+'&longitude='+aO.join(',')+'&hourly=temperature_2m,relative_humidity_2m,wind_speed_10m,wind_direction_10m,soil_moisture_0_to_7cm,soil_moisture_7_to_28cm&timezone=auto&forecast_days=1');
-    var data=await resp.json();var arr=Array.isArray(data)?data:[data];
-    weatherGrid={rows:R,cols:C,south:s,north:n,west:w,east:e,data:arr};
+    // Split into batches of 128 for reliability
+    var allData=[];
+    var batchSize=128;
+    for(var i=0;i<allLats.length;i+=batchSize){
+      var bL=allLats.slice(i,i+batchSize),bO=allLons.slice(i,i+batchSize);
+      var resp=await fetch('https://api.open-meteo.com/v1/forecast?latitude='+bL.join(',')+'&longitude='+bO.join(',')+params);
+      var data=await resp.json();var arr=Array.isArray(data)?data:[data];
+      allData=allData.concat(arr);
+    }
+    weatherGrid={rows:R,cols:C,south:s,north:n,west:w,east:e,data:allData};
   }catch(ex){console.warn('Weather grid:',ex);}
   hideToast();
 }
@@ -434,40 +447,88 @@ function aqInterp(field,idx,lat,lon){
   return a*(1-fx)*(1-fy)+b*fx*(1-fy)+c2*(1-fx)*fy+d*fx*fy;
 }
 
-/* ===== POLLEN ===== */
-async function fetchPollen(){
-  showToast('Loading pollen data…');
-  try{var r=await fetch('https://air-quality-api.open-meteo.com/v1/air-quality?latitude='+userLat+'&longitude='+userLon+'&hourly=grass_pollen,birch_pollen,ragweed_pollen&current=european_aqi&timezone=auto&forecast_days=2');pollenData=await r.json();}catch(e){console.warn('Pollen:',e);}
-  hideToast();
-}
 
 /* ===== ALERTS ===== */
 async function fetchAlerts(){
   showToast('Loading alerts…');alertData=[];
   var c=map.getCenter();
-  try{var r=await fetch('https://api.weather.gov/alerts/active?point='+c.lat.toFixed(4)+','+c.lng.toFixed(4),{headers:{'User-Agent':'GeoLive','Accept':'application/geo+json'}});
+  var b=map.getBounds();
+  // Source 1: NWS (US only) - use zone/area for wider coverage
+  try{
+    // First try point-based alerts
+    var r=await fetch('https://api.weather.gov/alerts/active?point='+c.lat.toFixed(4)+','+c.lng.toFixed(4),{headers:{'User-Agent':'GeoLive','Accept':'application/geo+json'}});
     if(r.ok){var d=await r.json();if(d.features)d.features.forEach(function(f){
       var p=f.properties||{};var coords={lat:c.lat,lon:c.lng};
       if(f.geometry&&f.geometry.type==='Polygon'&&f.geometry.coordinates[0]){
         var pts=f.geometry.coordinates[0],cx=0,cy=0;pts.forEach(function(pt){cx+=pt[0];cy+=pt[1];});coords={lat:cy/pts.length,lon:cx/pts.length};}
       alertData.push({lat:coords.lat,lon:coords.lon,title:p.headline||p.event||'Alert',severity:p.severity||'Unknown',type:'NWS',event:p.event||'',desc:(p.description||'').substring(0,200)});
     });}
-  }catch(e){}
-  try{var r2=await fetch('https://www.gdacs.org/gdacsapi/api/events/geteventlist/SEARCH?alertlevel=Green;Orange;Red&eventlist=EQ;TC;FL;VO;DR;WF&fromDate='+gibsDate(60)+'&toDate='+gibsDate(0)+'&limit=50');
-    if(r2.ok){var d2=await r2.json();if(d2.features)d2.features.forEach(function(f){
+  }catch(e){console.warn('NWS:',e);}
+  // If no NWS point alerts, try area-based (wider search)
+  if(alertData.length===0){
+    try{
+      var r2=await fetch('https://api.weather.gov/alerts/active?area='+getUSState(c.lat,c.lng),{headers:{'User-Agent':'GeoLive','Accept':'application/geo+json'}});
+      if(r2.ok){var d2=await r2.json();if(d2.features)d2.features.slice(0,20).forEach(function(f){
+        var p=f.properties||{};var coords={lat:c.lat,lon:c.lng};
+        if(f.geometry&&f.geometry.coordinates){
+          if(f.geometry.type==='Polygon'&&f.geometry.coordinates[0]){
+            var pts=f.geometry.coordinates[0],cx=0,cy=0;pts.forEach(function(pt){cx+=pt[0];cy+=pt[1];});coords={lat:cy/pts.length,lon:cx/pts.length};}
+          else if(f.geometry.type==='Point')coords={lat:f.geometry.coordinates[1],lon:f.geometry.coordinates[0]};
+        }
+        alertData.push({lat:coords.lat,lon:coords.lon,title:p.headline||p.event||'Alert',severity:p.severity||'Unknown',type:'NWS',event:p.event||'',desc:(p.description||'').substring(0,200)});
+      });}
+    }catch(e){console.warn('NWS area:',e);}
+  }
+  // Source 2: USGS Earthquakes (worldwide, CORS-friendly) — wider search, lower threshold
+  try{
+    var r3=await fetch('https://earthquake.usgs.gov/fdsnws/event/1/query?format=geojson&starttime='+gibsDate(14)+'&endtime='+gibsDate(0)+'&minmagnitude=3&minlatitude='+b.getSouth().toFixed(1)+'&maxlatitude='+b.getNorth().toFixed(1)+'&minlongitude='+b.getWest().toFixed(1)+'&maxlongitude='+b.getEast().toFixed(1)+'&limit=50&orderby=magnitude');
+    if(r3.ok){var d3=await r3.json();if(d3.features)d3.features.forEach(function(f){
+      var p=f.properties||{},g=f.geometry;if(!g||!g.coordinates)return;
+      var mag=p.mag||0;
+      alertData.push({lat:g.coordinates[1],lon:g.coordinates[0],title:'M'+mag.toFixed(1)+' — '+(p.place||'Earthquake'),severity:mag>=6?'Extreme':mag>=5?'Severe':'Minor',type:'USGS',event:'eq',desc:'Depth: '+(g.coordinates[2]||0).toFixed(0)+'km · '+new Date(p.time).toLocaleString()});
+    });}
+  }catch(e){console.warn('USGS:',e);}
+  // Source 3: NASA EONET (natural events - CORS-friendly, worldwide)
+  try{
+    var r4=await fetch('https://eonet.gsfc.nasa.gov/api/v3/events?status=open&limit=30&days=30');
+    if(r4.ok){var d4=await r4.json();if(d4.events)d4.events.forEach(function(ev){
+      if(!ev.geometry||!ev.geometry.length)return;
+      var geo=ev.geometry[ev.geometry.length-1]; // most recent geometry
+      if(!geo.coordinates)return;
+      var lat=geo.coordinates[1],lon=geo.coordinates[0];
+      // Only include if roughly in view (within 30° of center)
+      if(Math.abs(lat-c.lat)>30||Math.abs(lon-c.lng)>30)return;
+      var cat=ev.categories&&ev.categories[0]?ev.categories[0].title:'Event';
+      alertData.push({lat:lat,lon:lon,title:ev.title||cat,severity:'Minor',type:'EONET',event:cat.toLowerCase(),desc:cat+' · '+new Date(geo.date).toLocaleDateString()});
+    });}
+  }catch(e){console.warn('EONET:',e);}
+  // Source 4: GDACS (may fail CORS - non-critical)
+  try{var r5=await fetch('https://www.gdacs.org/gdacsapi/api/events/geteventlist/SEARCH?alertlevel=Green;Orange;Red&eventlist=EQ;TC;FL;VO;DR;WF&fromDate='+gibsDate(30)+'&toDate='+gibsDate(0)+'&limit=30');
+    if(r5.ok){var d5=await r5.json();if(d5.features)d5.features.forEach(function(f){
       var p=f.properties||{},g=f.geometry;
       if(g&&g.coordinates)alertData.push({lat:g.coordinates[1],lon:g.coordinates[0],title:p.name||p.eventtype||'Event',severity:p.alertlevel==='Red'?'Extreme':p.alertlevel==='Orange'?'Severe':'Minor',type:'GDACS',event:p.eventtype||'',desc:'Alert: '+(p.alertlevel||'?')});
     });}
-  }catch(e){}
-  console.log('Alerts:',alertData.length);renderAlertMarkers();hideToast();
+  }catch(e){console.warn('GDACS (CORS):',e);}
+  console.log('Alerts:',alertData.length);
+  if(alertData.length===0)showToast('No active alerts in this area (earthquakes M3+ / weather / natural events)',3000);
+  renderAlertMarkers();hideToast();
+}
+/* Rough US state code from lat/lon for NWS area query */
+function getUSState(lat,lon){
+  if(lat<24||lat>50||lon<-125||lon>-66)return'US';
+  if(lat>42&&lon<-71)return'ME';if(lat>40&&lon>-75)return'NY';
+  if(lat<31&&lon>-88&&lon<-80)return'FL';if(lat<35&&lon>-90&&lon<-75)return'NC';
+  if(lat<32&&lon>-107&&lon<-93)return'TX';if(lat>35&&lon<-115)return'CA';
+  return'US';
 }
 function renderAlertMarkers(){
   if(alertMarkers)try{map.removeLayer(alertMarkers);}catch(e){}
   alertMarkers=L.layerGroup();
   alertData.forEach(function(a){
     var bg=a.severity==='Extreme'?'#ef4444':a.severity==='Severe'?'#f97316':'#fbbf24';
-    var em={'eq':'💥','tc':'🌀','fl':'🌊','vo':'🌋','wf':'🔥','dr':'🏜️'}[a.event.toLowerCase()]||'⚠️';
-    if(a.event.toLowerCase().indexOf('tornado')>=0)em='🌪️';if(a.event.toLowerCase().indexOf('thunder')>=0)em='⛈️';
+    var evl=a.event.toLowerCase();
+    var em={'eq':'💥','earthquake':'💥','tc':'🌀','cyclone':'🌀','fl':'🌊','flood':'🌊','vo':'🌋','volcano':'🌋','volcanoes':'🌋','wf':'🔥','wildfire':'🔥','wildfires':'🔥','dr':'🏜️','drought':'🏜️','severe storms':'⛈️','sea and lake ice':'🧊','iceberg':'🧊','icebergs':'🧊'}[evl]||'⚠️';
+    if(evl.indexOf('tornado')>=0)em='🌪️';if(evl.indexOf('thunder')>=0)em='⛈️';if(evl.indexOf('fire')>=0)em='🔥';if(evl.indexOf('storm')>=0)em='⛈️';
     var icon=L.divIcon({className:'',html:'<div class="alert-icon" style="background:'+bg+'">'+em+'</div>',iconSize:[28,28],iconAnchor:[14,14]});
     var m=L.marker([a.lat,a.lon],{icon:icon,zIndexOffset:500});
     m.bindPopup('<b>'+a.title+'</b><br><span style="color:'+bg+';font-weight:600">'+a.severity+' · '+a.type+'</span>'+(a.desc?'<br><small style="opacity:.7">'+a.desc+'</small>':''));
@@ -540,64 +601,133 @@ function createLSTLayer(){return mkGIBS('MODIS_Terra_Land_Surface_Temp_Day',gibs
 function createCloudLayer(){return L.tileLayer('https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/VIIRS_SNPP_CorrectedReflectance_TrueColor/default/'+gibsDate(1)+'/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg',{maxZoom:18,maxNativeZoom:9,opacity:.5,errorTileUrl:ERR_TILE});}
 function createNightLightsLayer(){return mkGIBS('VIIRS_Black_Marble','2016-01-01',8,.8);}
 
-/* SST: try multiple recent dates since MUR has ~2-4 day lag */
+/* SST: Use GIBS WMS with TIME parameter — more reliable than WMTS tile-by-tile */
 function createSSTLayer(){
   showToast('Loading sea temperature…');
   var group=L.layerGroup();
-  [2,3,4,5].forEach(function(d){
-    var t=L.tileLayer('https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/GHRSST_L4_MUR_Sea_Surface_Temperature/default/'+gibsDate(d)+'/GoogleMapsCompatible_Level9/{z}/{y}/{x}.png',{maxZoom:18,maxNativeZoom:9,opacity:.75,errorTileUrl:ERR_TILE});
-    t.on('load',function(){hideToast();});
-    group.addLayer(t);
+  // Try dates 3-7 days ago (MUR has 2-4 day processing lag)
+  var dates=[3,4,5,6,7];
+  dates.forEach(function(d){
+    group.addLayer(L.tileLayer.wms('https://gibs.earthdata.nasa.gov/wms/epsg3857/best/wms.cgi',{
+      layers:'GHRSST_L4_MUR_Sea_Surface_Temperature',
+      format:'image/png',transparent:true,opacity:.7,
+      time:gibsDate(d),version:'1.1.1',maxZoom:18
+    }));
   });
-  setTimeout(hideToast,8000);
+  // Also add G1SST as a fallback (different product, less lag)
+  group.addLayer(L.tileLayer.wms('https://gibs.earthdata.nasa.gov/wms/epsg3857/best/wms.cgi',{
+    layers:'GHRSST_L4_G1SST_Sea_Surface_Temperature',
+    format:'image/png',transparent:true,opacity:.65,
+    time:gibsDate(2),version:'1.1.1',maxZoom:18
+  }));
+  setTimeout(hideToast,6000);
   return group;
 }
 
-/* Population: SEDAC GPW via direct CIESIN WMS (L.tileLayer.wms) + GIBS fallback */
+/* Population: NASA SEDAC via ArcGIS MapServer WMS, then GIBS WMS fallback */
 function createPopulationLayer(){
   showToast('Loading population density…');
   var group=L.layerGroup();
-  // Try SEDAC WMS (CIESIN Columbia)
-  var wms=L.tileLayer.wms('https://sedac.ciesin.columbia.edu/geoserver/gpw-v4-rev11/wms',{
-    layers:'gpw-v4-rev11:gpw-v4-population-density-adjusted-to-2015-unwpp-country-totals-rev11-2020',
-    format:'image/png',transparent:true,opacity:.6,version:'1.1.1',maxZoom:18
+  var loaded=false;
+  // Strategy 1: NASA Disasters MapServer (CORS-enabled, most reliable)
+  var wms1=L.tileLayer.wms('https://maps.disasters.nasa.gov/ags03/rest/services/SEDAC/SEDAC_GPWv4/MapServer/WMSServer',{
+    layers:'0',format:'image/png',transparent:true,opacity:.65,version:'1.1.1',maxZoom:18
   });
-  wms.on('tileerror',function(){
-    console.log('SEDAC WMS failed, trying GIBS…');
-    group.clearLayers();
-    // Fallback: GIBS SEDAC layer
-    var gibs=L.tileLayer('https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/SEDAC_POP_2000-2020-5YR_v4.11_DENSITY_2020/default/2020-01-01/GoogleMapsCompatible_Level7/{z}/{y}/{x}.png',{maxZoom:18,maxNativeZoom:7,opacity:.6,errorTileUrl:ERR_TILE});
-    gibs.on('tileerror',function(){
-      console.log('GIBS SEDAC also failed, trying alt name…');
-      group.clearLayers();
-      var alt=L.tileLayer('https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/GPW_Population_Density_2020/default/2020-01-01/GoogleMapsCompatible_Level7/{z}/{y}/{x}.png',{maxZoom:18,maxNativeZoom:7,opacity:.6,errorTileUrl:ERR_TILE});
-      group.addLayer(alt);
-    });
-    group.addLayer(gibs);
+  wms1.on('load',function(){if(!loaded){loaded=true;hideToast();}});
+  group.addLayer(wms1);
+  // Strategy 2: GIBS WMS — try known layer names for population
+  var wms2=L.tileLayer.wms('https://gibs.earthdata.nasa.gov/wms/epsg3857/best/wms.cgi',{
+    layers:'GPW_Population_Density_2020',format:'image/png',transparent:true,opacity:.55,version:'1.1.1',maxZoom:18
   });
-  wms.on('load',function(){hideToast();});
-  group.addLayer(wms);
-  setTimeout(hideToast,8000);
+  group.addLayer(wms2);
+  // Strategy 3: SEDAC GIS earthdata Image Server
+  var wms3=L.tileLayer.wms('https://gis.earthdata.nasa.gov/image/services/gpw-v4/gpw_v4_population_density_rev11_2020_30_sec/ImageServer/WMSServer',{
+    layers:'0',format:'image/png',transparent:true,opacity:.6,version:'1.1.1',maxZoom:18
+  });
+  group.addLayer(wms3);
+  setTimeout(function(){if(!loaded)hideToast();},10000);
   return group;
 }
 
-/* SeaMarks: OpenSeaMap */
+/* SeaMarks: Multiple sources for global maritime data */
 function createSeaMarkLayer(){
-  showToast('Loading sea marks…');
-  var t=L.tileLayer('https://tiles.openseamap.org/seamark/{z}/{x}/{y}.png',{maxZoom:18,opacity:.9,errorTileUrl:ERR_TILE});
-  t.on('load',function(){hideToast();});
-  setTimeout(hideToast,5000);
-  return t;
+  var z=map.getZoom();
+  showToast('Loading maritime layers…');
+  var group=L.layerGroup();
+  // Source 1: Marine Regions EEZ (Exclusive Economic Zones — global, CORS-enabled, very reliable)
+  var eez=L.tileLayer.wms('https://geo.vliz.be/geoserver/MarineRegions/wms',{
+    layers:'eez',format:'image/png',transparent:true,
+    opacity:.55,version:'1.1.1',maxZoom:18,srs:'EPSG:4326'
+  });
+  group.addLayer(eez);
+  // Source 2: Marine Regions IHO sea areas
+  var iho=L.tileLayer.wms('https://geo.vliz.be/geoserver/MarineRegions/wms',{
+    layers:'iho',format:'image/png',transparent:true,
+    opacity:.45,version:'1.1.1',maxZoom:18,srs:'EPSG:4326'
+  });
+  group.addLayer(iho);
+  // Source 3: Marine Regions - continental shelves
+  var shelf=L.tileLayer.wms('https://geo.vliz.be/geoserver/MarineRegions/wms',{
+    layers:'continental_shelves',format:'image/png',transparent:true,
+    opacity:.35,version:'1.1.1',maxZoom:18,srs:'EPSG:4326'
+  });
+  group.addLayer(shelf);
+  // Source 4: OpenSeaMap (sea marks — buoys, lights, ports — zoom 9+ near coast)
+  var osm=L.tileLayer('https://tiles.openseamap.org/seamark/{z}/{x}/{y}.png',{maxZoom:18,opacity:.85,errorTileUrl:ERR_TILE,minZoom:7});
+  group.addLayer(osm);
+  // Source 5: NOAA ENC Chart Display (US waters — may have CORS limits, best-effort)
+  try{
+    var noaa=L.tileLayer.wms('https://gis.charttools.noaa.gov/arcgis/rest/services/MCS/NOAAChartDisplay/MapServer/exts/MaritimeChartService/WMSServer',{
+      layers:'0,1,2,3,4,5,6,7',format:'image/png',transparent:true,
+      opacity:.45,version:'1.1.1',maxZoom:18
+    });
+    group.addLayer(noaa);
+  }catch(e){console.warn('NOAA ENC unavailable:',e);}
+  if(z<7)showToast('Maritime boundaries visible. Zoom to coast for navigation marks.',4000);
+  setTimeout(hideToast,6000);
+  return group;
 }
 
-/* Fire */
+/* Fire: GIBS thermal anomaly tiles + FIRMS open data markers */
+var fireMarkers=null;
 function createFireLayers(){
   var group=L.layerGroup();
-  ['MODIS_Terra_Thermal_Anomalies_Day','MODIS_Aqua_Thermal_Anomalies_Day','VIIRS_SNPP_Thermal_Anomalies_375m_Day','VIIRS_NOAA20_Thermal_Anomalies_375m_Day'].forEach(function(name){
-    var maxN=name.indexOf('VIIRS')>=0?10:8;
-    [1,2,3].forEach(function(d){group.addLayer(mkGIBS(name,gibsDate(d),maxN,1));});
+  // GIBS tiles: only the 2 most reliable instruments × 2 recent dates = 4 layers
+  var layers=[
+    {name:'VIIRS_SNPP_Thermal_Anomalies_375m_Day',level:10},
+    {name:'VIIRS_SNPP_Thermal_Anomalies_375m_Night',level:10}
+  ];
+  layers.forEach(function(cfg){
+    [1,2].forEach(function(d){
+      group.addLayer(L.tileLayer(
+        'https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/'+cfg.name+'/default/'+gibsDate(d)+'/GoogleMapsCompatible_Level'+cfg.level+'/{z}/{y}/{x}.png',
+        {maxZoom:18,maxNativeZoom:cfg.level,opacity:1,errorTileUrl:ERR_TILE}
+      ));
+    });
   });
+  // Also fetch FIRMS open CSV data for actual fire points
+  fetchFIRMSData(group);
   return group;
+}
+async function fetchFIRMSData(group){
+  try{
+    var b=map.getBounds();
+    // FIRMS open archive - MODIS C6.1 last 24h (no API key needed for map_key=...)
+    var url='https://firms.modaps.eosdis.nasa.gov/api/area/csv/FIRMS_MAP_KEY/VIIRS_SNPP_NRT/'+
+      b.getWest().toFixed(1)+','+b.getSouth().toFixed(1)+','+b.getEast().toFixed(1)+','+b.getNorth().toFixed(1)+'/2/'+gibsDate(0);
+    // Fallback: use GIBS WMS to fetch fire data as WMS layer
+    var wms=L.tileLayer.wms('https://gibs.earthdata.nasa.gov/wms/epsg3857/best/wms.cgi',{
+      layers:'MODIS_Terra_Thermal_Anomalies_Day',format:'image/png',
+      transparent:true,opacity:.9,time:gibsDate(1),version:'1.1.1',maxZoom:18
+    });
+    group.addLayer(wms);
+    var wms2=L.tileLayer.wms('https://gibs.earthdata.nasa.gov/wms/epsg3857/best/wms.cgi',{
+      layers:'MODIS_Aqua_Thermal_Anomalies_Day',format:'image/png',
+      transparent:true,opacity:.9,time:gibsDate(1),version:'1.1.1',maxZoom:18
+    });
+    group.addLayer(wms2);
+  }catch(e){console.warn('FIRMS:',e);}
+  showToast('Fire hotspots: red dots show active fires (if any in view)',3000);
 }
 
 /* ===== CANVAS OVERLAY ENGINE ===== */
@@ -619,25 +749,30 @@ var AnimOverlay=L.Layer.extend({
   _loop:function(){if(!this._running)return;this._fc++;if(this._fc%3===0){this._repos();this._ctx.clearRect(0,0,this._c.width,this._c.height);this._fn(this._ctx,this._c,this._map);}requestAnimationFrame(this._loop.bind(this));}
 });
 
-function getStep(){var z=map?map.getZoom():10;return z>=12?2:z>=8?3:5;}
+function getStep(){return 2;}
 function renderHiRes(ctx,c,m,fn){
   var S=getStep(),w=c.width,h=c.height,sw=Math.ceil(w/S),sh=Math.ceil(h/S);
   var img=ctx.createImageData(sw,sh),d=img.data;
   var b=m.getBounds(),so=b.getSouth(),no=b.getNorth(),we=b.getWest(),ea=b.getEast();
   for(var py=0;py<sh;py++){var lat=no-(py/sh)*(no-so);for(var px=0;px<sw;px++){var lon=we+(px/sw)*(ea-we);var rgba=fn(lat,lon);var i=(py*sw+px)*4;d[i]=rgba[0];d[i+1]=rgba[1];d[i+2]=rgba[2];d[i+3]=rgba[3];}}
   var off=document.createElement('canvas');off.width=sw;off.height=sh;off.getContext('2d').putImageData(img,0,0);
-  ctx.imageSmoothingEnabled=true;ctx.imageSmoothingQuality='high';ctx.drawImage(off,0,0,sw,sh,0,0,w,h);
+  // First pass: upscale with high-quality smoothing
+  var mid=document.createElement('canvas');mid.width=w;mid.height=h;
+  var mctx=mid.getContext('2d');mctx.imageSmoothingEnabled=true;mctx.imageSmoothingQuality='high';
+  mctx.drawImage(off,0,0,sw,sh,0,0,w,h);
+  // Second pass: apply Gaussian blur for seamless gradient appearance
+  ctx.filter='blur(4px)';ctx.drawImage(mid,0,0);ctx.filter='none';
 }
 
 /* ===== DRAW: TEMPERATURE ===== */
-function tempColor(t){if(t==null)return[0,0,0,0];var r,g,b;if(t<-10){r=20;g=40;b=180;}else if(t<0){var f=(t+10)/10;r=20+39*f;g=40+90*f;b=180+66*f;}else if(t<10){var f=t/10;r=59-25*f;g=130+81*f;b=246-8*f;}else if(t<20){var f=(t-10)/10;r=34+18*f;g=211;b=238-85*f;}else if(t<28){var f=(t-20)/8;r=52+198*f;g=211-7*f;b=153-132*f;}else if(t<35){var f=(t-28)/7;r=250-f;g=204-89*f;b=21+f;}else{r=239;g=68;b=68;}return[Math.round(r),Math.round(g),Math.round(b),55];}
+function tempColor(t){if(t==null)return[0,0,0,0];var r,g,b;if(t<-10){r=20;g=40;b=180;}else if(t<0){var f=(t+10)/10;r=20+39*f;g=40+90*f;b=180+66*f;}else if(t<10){var f=t/10;r=59-25*f;g=130+81*f;b=246-8*f;}else if(t<20){var f=(t-10)/10;r=34+18*f;g=211;b=238-85*f;}else if(t<28){var f=(t-20)/8;r=52+198*f;g=211-7*f;b=153-132*f;}else if(t<35){var f=(t-28)/7;r=250-f;g=204-89*f;b=21+f;}else{r=239;g=68;b=68;}return[Math.round(r),Math.round(g),Math.round(b),70];}
 function drawTemp(ctx,c,m){if(!weatherGrid)return;var idx=getNowHourIdx();renderHiRes(ctx,c,m,function(lat,lon){return tempColor(gridInterp('temperature_2m',idx,lat,lon));});}
 
 /* ===== DRAW: WIND ===== */
 function drawWind(ctx,c,m){if(!weatherGrid)return;var idx=getNowHourIdx();var b=m.getBounds(),rows=10,cols=14;for(var i=0;i<rows;i++)for(var j=0;j<cols;j++){var lat=b.getSouth()+(b.getNorth()-b.getSouth())*((i+.5)/rows);var lon=b.getWest()+(b.getEast()-b.getWest())*((j+.5)/cols);var spd=gridInterp('wind_speed_10m',idx,lat,lon),dir=gridInterp('wind_direction_10m',idx,lat,lon);if(spd==null||dir==null)continue;var pt=m.latLngToContainerPoint([lat,lon]);var alpha=Math.min(.85,.2+spd/45),len=Math.max(8,Math.min(24,spd*.8));ctx.save();ctx.translate(pt.x,pt.y);ctx.rotate(dir*Math.PI/180+Math.PI);ctx.beginPath();ctx.moveTo(0,-len);ctx.lineTo(-len*.25,len*.3);ctx.lineTo(0,len*.15);ctx.lineTo(len*.25,len*.3);ctx.closePath();ctx.fillStyle='rgba(148,211,247,'+alpha+')';ctx.fill();ctx.restore();}}
 
 /* ===== DRAW: DROUGHT ===== */
-function droughtColor(n){var r,g,b;if(n<.15){r=180;g=50;b=20;}else if(n<.3){var f=(n-.15)/.15;r=180+40*f;g=50+100*f;b=20+20*f;}else if(n<.5){var f=(n-.3)/.2;r=220-80*f;g=150+30*f;b=40+40*f;}else if(n<.7){var f=(n-.5)/.2;r=140-80*f;g=180+10*f;b=80+40*f;}else{var f=(n-.7)/.3;r=60-30*f;g=190-60*f;b=120+80*f;}return[Math.round(r),Math.round(g),Math.round(b),75];}
+function droughtColor(n){var r,g,b;if(n<.15){r=180;g=50;b=20;}else if(n<.3){var f=(n-.15)/.15;r=180+40*f;g=50+100*f;b=20+20*f;}else if(n<.5){var f=(n-.3)/.2;r=220-80*f;g=150+30*f;b=40+40*f;}else if(n<.7){var f=(n-.5)/.2;r=140-80*f;g=180+10*f;b=80+40*f;}else{var f=(n-.7)/.3;r=60-30*f;g=190-60*f;b=120+80*f;}return[Math.round(r),Math.round(g),Math.round(b),85];}
 function drawDrought(ctx,c,m){if(!weatherGrid)return;var idx=getNowHourIdx();var s=gridVal('soil_moisture_0_to_7cm',idx,0,0);if(s!=null){renderHiRes(ctx,c,m,function(lat,lon){var a=gridInterp('soil_moisture_0_to_7cm',idx,lat,lon),b2=gridInterp('soil_moisture_7_to_28cm',idx,lat,lon);if(a==null)return[0,0,0,0];var v=b2!=null?(a*.4+b2*.6):a;return droughtColor(Math.min(1,v/.35));});}else{renderHiRes(ctx,c,m,function(lat,lon){var h=gridInterp('relative_humidity_2m',idx,lat,lon);if(h==null)return[0,0,0,0];return droughtColor(h/100*.8);});}}
 
 /* ===== DRAW: AQ ===== */
@@ -878,14 +1013,6 @@ function renderInfoPanel(){
     }
   }
 
-  // Pollen
-  if(activeLayers.has('pollen')&&pollenData&&pollenData.hourly){
-    var ph=pollenData.hourly,pi=findNowIdx(ph.time||[]);
-    var gr=ph.grass_pollen?ph.grass_pollen[pi]:0;var bi=ph.birch_pollen?ph.birch_pollen[pi]:0;var ra=ph.ragweed_pollen?ph.ragweed_pollen[pi]:0;
-    var mx=Math.max(gr||0,bi||0,ra||0);var pc=mx>80?'#ef4444':mx>40?'#f97316':mx>15?'#fbbf24':'#34d399';
-    cards+='<div class="info-card"><div class="info-card-title"><i class="ic">🌸</i> Pollen</div><div class="info-val-row"><div class="info-val" style="color:'+pc+'">'+Math.round(mx)+'<span class="unit">gr/m³</span></div></div><div class="info-row"><div class="info-metric"><div class="info-metric-label">Grass</div><div class="info-metric-val">'+Math.round(gr||0)+'</div></div><div class="info-metric"><div class="info-metric-label">Birch</div><div class="info-metric-val">'+Math.round(bi||0)+'</div></div><div class="info-metric"><div class="info-metric-label">Ragw</div><div class="info-metric-val">'+Math.round(ra||0)+'</div></div></div></div>';
-  }
-
   panel.innerHTML=cards;
 }
 
@@ -896,12 +1023,12 @@ function updateLegend(){
   if(activeLayers.has('drought')){show=true;html+='<h4 style="margin-top:8px">Soil Moisture</h4><div class="legend-gradient" style="background:linear-gradient(to right,#b43214,#dca028,#8cb450,#2864c8)"></div><div class="legend-labels"><span>Drought</span><span>Wet</span></div>';}
   if(activeLayers.has('airquality')){show=true;html+='<h4 style="margin-top:8px">AQI</h4><div style="display:flex;gap:2px;margin:3px 0"><div style="flex:1;height:6px;border-radius:2px;background:#34d399"></div><div style="flex:1;height:6px;border-radius:2px;background:#fbbf24"></div><div style="flex:1;height:6px;border-radius:2px;background:#f97316"></div><div style="flex:1;height:6px;border-radius:2px;background:#ef4444"></div><div style="flex:1;height:6px;border-radius:2px;background:#a855f7"></div></div><div class="legend-labels"><span>Good</span><span>Hazardous</span></div>';}
   if(activeLayers.has('tide')){show=true;html+='<h4 style="margin-top:8px">Tide · Wave Height</h4><div class="legend-gradient" style="background:linear-gradient(to right,rgba(15,50,120,0.4),rgba(30,120,200,0.7),rgba(56,200,255,1))"></div><div class="legend-labels"><span>Low</span><span>High</span></div><div style="margin-top:5px;display:flex;align-items:center;gap:6px"><div style="width:4px;height:18px;border-radius:2px;background:linear-gradient(to top,rgba(15,40,100,.6),rgba(56,200,255,1));position:relative"><div style="position:absolute;left:-2px;width:8px;height:2px;background:#fff;border-radius:1px;top:30%"></div></div><span style="font-size:8px;color:var(--text3)">Range bar shows position<br>in local min–max range</span></div><div style="margin-top:3px;font-size:8px;color:var(--text3)"><span style="color:rgba(30,70,140,0.5)">━━</span> No data (dim)<br><span style="color:rgba(56,200,255,1)">━━</span> Data coverage area</div><div class="legend-src">Open-Meteo Marine</div>';}
-  if(activeLayers.has('sst')){show=true;html+='<h4 style="margin-top:8px">Sea Temp</h4><div class="legend-gradient" style="background:linear-gradient(to right,#1e3a8a,#22d3ee,#facc15,#ef4444)"></div><div class="legend-labels"><span>Cold</span><span>Warm</span></div><div class="legend-src">GHRSST MUR GIBS</div>';}
-  if(activeLayers.has('seamark')){show=true;html+='<h4 style="margin-top:8px">Sea Marks</h4><div class="legend-src">OpenSeaMap — zoom 9+</div>';}
-  if(activeLayers.has('fire')){show=true;html+='<h4 style="margin-top:8px">Fires</h4><div class="legend-item"><div class="legend-color" style="background:#ff4500"></div><span>Thermal anomaly</span></div>';}
-  if(activeLayers.has('alerts')&&alertData.length>0){show=true;html+='<h4 style="margin-top:8px">Alerts ('+alertData.length+')</h4><div class="legend-item"><div class="legend-color" style="background:#ef4444"></div><span>Extreme</span></div><div class="legend-item"><div class="legend-color" style="background:#fbbf24"></div><span>Minor</span></div>';}
+  if(activeLayers.has('sst')){show=true;html+='<h4 style="margin-top:8px">Sea Temp</h4><div class="legend-gradient" style="background:linear-gradient(to right,#1e3a8a,#22d3ee,#facc15,#ef4444)"></div><div class="legend-labels"><span>Cold</span><span>Warm</span></div><div class="legend-src">GHRSST MUR + G1SST · GIBS WMS</div>';}
+  if(activeLayers.has('seamark')){show=true;html+='<h4 style="margin-top:8px">Maritime</h4><div class="legend-src">EEZ · IHO sea areas · shelves<br>OpenSeaMap marks · NOAA ENC (US)</div>';}
+  if(activeLayers.has('fire')){show=true;html+='<h4 style="margin-top:8px">Fires</h4><div class="legend-item"><div class="legend-color" style="background:#ff4500"></div><span>Thermal anomaly (VIIRS+MODIS)</span></div><div class="legend-src">NASA GIBS · last 48h</div>';}
+  if(activeLayers.has('alerts')){show=true;html+='<h4 style="margin-top:8px">Alerts ('+alertData.length+')</h4><div class="legend-item"><div class="legend-color" style="background:#ef4444"></div><span>Extreme</span></div><div class="legend-item"><div class="legend-color" style="background:#fbbf24"></div><span>Minor</span></div><div class="legend-src">NWS · USGS · EONET · GDACS</div>';}
   if(activeLayers.has('lightpollution')){show=true;html+='<h4 style="margin-top:8px">Night Lights</h4><div class="legend-gradient" style="background:linear-gradient(to right,#0a0e17,#f59e0b)"></div><div class="legend-labels"><span>Dark</span><span>Bright</span></div>';}
-  if(activeLayers.has('population')){show=true;html+='<h4 style="margin-top:8px">Population</h4><div class="legend-src">GPWv4 SEDAC</div>';}
+  if(activeLayers.has('population')){show=true;html+='<h4 style="margin-top:8px">Population</h4><div class="legend-src">GPWv4 · NASA SEDAC MapServer</div>';}
   if(activeLayers.has('vegetation')){show=true;html+='<h4 style="margin-top:8px">NDVI</h4><div class="legend-gradient" style="background:linear-gradient(to right,#c2b280,#1b5e20)"></div><div class="legend-labels"><span>Barren</span><span>Dense</span></div>';}
   if(activeLayers.has('precipitation')){show=true;html+='<h4 style="margin-top:8px">Rain</h4><div class="legend-gradient" style="background:linear-gradient(to right,rgba(0,100,255,.2),rgba(255,255,0,.6),rgba(255,0,0,.7))"></div><div class="legend-labels"><span>Light</span><span>Heavy</span></div>';}
   el.innerHTML=html;el.classList.toggle('show',show);
@@ -918,10 +1045,12 @@ function toggleLayer(el,name){
   if(name==='satellite'){if(on){map.removeLayer(ML.dark);ML.satellite.addTo(map);}else{try{map.removeLayer(ML.satellite);}catch(e){}ML.dark.addTo(map);}}
   if(name==='traffic'){if(on)ML.traffic.addTo(map);else try{map.removeLayer(ML.traffic);}catch(e){}}
 
-  // Tile layers (lazy create)
+  // Tile layers (lazy create, but recreate SST/fire/population for fresh dates)
+  var _recreateOnToggle=new Set(['sst','population','fire','seamark']);
   if(_tileMap[name]){
     var k=_tileMap[name];
     if(on){
+      if(ML[k]&&_recreateOnToggle.has(name)){try{map.removeLayer(ML[k]);}catch(e){}ML[k]=null;}
       if(!ML[k]){
         if(name==='vegetation')ML[k]=createVegetationLayer();
         else if(name==='lst')ML[k]=createLSTLayer();
@@ -935,7 +1064,7 @@ function toggleLayer(el,name){
     }else if(ML[k])try{map.removeLayer(ML[k]);}catch(e){}
   }
 
-  if(name==='fire'){if(on){if(!ML.fire)ML.fire=createFireLayers();ML.fire.addTo(map);}else if(ML.fire)try{map.removeLayer(ML.fire);}catch(e){}}
+  if(name==='fire'){if(on){if(ML.fire){try{map.removeLayer(ML.fire);}catch(e){}}ML.fire=createFireLayers();ML.fire.addTo(map);}else if(ML.fire)try{map.removeLayer(ML.fire);}catch(e){}}
   if(name==='precipitation'){if(on&&ML.precip)ML.precip.addTo(map);else if(ML.precip)try{map.removeLayer(ML.precip);}catch(e){}}
 
   // Canvas layers that need weather grid
@@ -976,8 +1105,7 @@ function toggleLayer(el,name){
     }else if(canvasLayers.tide)try{map.removeLayer(canvasLayers.tide);}catch(e){}
   }
 
-  if(name==='pollen'){if(on&&!pollenData)fetchPollen().then(renderInfoPanel);}
-  if(name==='alerts'){if(on)fetchAlerts();else if(alertMarkers)try{map.removeLayer(alertMarkers);}catch(e){}}
+  if(name==='alerts'){if(on)fetchAlerts();else{if(alertMarkers)try{map.removeLayer(alertMarkers);}catch(e){}}}
 
   refreshAll();
 }
