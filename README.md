@@ -12,9 +12,9 @@
 [![APIs](https://img.shields.io/badge/Live_APIs-12+-34d399)]()
 ![Visitors](https://visitor-badge.laobi.icu/badge?page_id=EncyclopediaWorld.geolive)
 
-> **One page. Zero backend. The entire living Earth in your browser.**
+> **The entire living Earth in your browser.**
 
-GeoLive is a **single HTML file** that transforms your browser into a real-time geographic intelligence command center. No server, no build step, no API keys — just open it and watch the planet breathe.
+GeoLive transforms your browser into a real-time geographic intelligence command center. Just open it and watch the planet breathe.
 
 ---
 
