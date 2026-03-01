@@ -1,0 +1,884 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#0a0e17">
+<title>GeoLive · Geographic Intelligence</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg:#0a0e17;--bg2:#111827;--bg3:#1a2236;--bg4:#243049;
+  --text:#e2e8f0;--text2:#94a3b8;--text3:#64748b;
+  --accent:#38bdf8;--accent3:#34d399;--warn:#f59e0b;--danger:#ef4444;
+  --glass:rgba(10,14,23,0.85);--glass2:rgba(17,24,39,0.92);
+  --radius:14px;--radius-sm:10px;
+  --sidebar-w:290px;
+  --sat:env(safe-area-inset-top,0px);--sab:env(safe-area-inset-bottom,0px);
+  --sal:env(safe-area-inset-left,0px);--sar:env(safe-area-inset-right,0px);
+}
+html,body{height:100%;overflow:hidden;font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);-webkit-font-smoothing:antialiased;-webkit-tap-highlight-color:transparent}
+#app{position:relative;width:100%;height:100%}
+#map{width:100%;height:100%;z-index:1;background:#0a0e17}
+
+/* Leaflet overrides */
+.leaflet-control-zoom{border:none!important;box-shadow:0 2px 12px rgba(0,0,0,.4)!important;margin-bottom:10px!important;margin-right:calc(10px + var(--sar))!important}
+.leaflet-control-zoom a{background:var(--glass2)!important;color:var(--text)!important;border:1px solid rgba(255,255,255,.08)!important;backdrop-filter:blur(12px);width:40px!important;height:40px!important;line-height:40px!important;font-size:18px!important}
+.leaflet-control-zoom a:hover{background:var(--bg3)!important}
+.leaflet-control-attribution{display:none!important}
+.leaflet-popup-content-wrapper{background:var(--glass2);color:var(--text);border-radius:var(--radius-sm);border:1px solid rgba(255,255,255,.08);backdrop-filter:blur(16px);box-shadow:0 8px 32px rgba(0,0,0,.5)}
+.leaflet-popup-tip{background:var(--glass2)}
+.leaflet-popup-content{margin:12px 16px;font-size:13px;line-height:1.6}
+.canvas-overlay{pointer-events:none!important;position:absolute!important}
+
+/* Sidebar */
+#sidebar{position:absolute;top:0;left:0;z-index:1000;width:var(--sidebar-w);height:100%;background:var(--glass);backdrop-filter:blur(24px)saturate(1.8);border-right:1px solid rgba(255,255,255,.06);display:flex;flex-direction:column;transition:transform .3s cubic-bezier(.4,0,.2,1);overflow:hidden;padding-top:var(--sat);padding-left:var(--sal)}
+#sidebar.collapsed{transform:translateX(calc(-1 * var(--sidebar-w) - var(--sal)))}
+#sidebar-toggle{position:absolute;z-index:1001;top:calc(12px + var(--sat));left:calc(12px + var(--sal));width:44px;height:44px;border-radius:50%;background:var(--glass2);backdrop-filter:blur(16px);border:1px solid rgba(255,255,255,.1);color:var(--text);font-size:18px;cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:0 4px 16px rgba(0,0,0,.4);transition:all .3s ease;-webkit-tap-highlight-color:transparent}
+#sidebar-toggle:active{transform:scale(.92)}
+#sidebar.collapsed~#sidebar-toggle{left:calc(12px + var(--sal))}
+#sidebar:not(.collapsed)~#sidebar-toggle{left:calc(var(--sidebar-w) + var(--sal) + 12px)}
+.sidebar-header{padding:16px 16px 12px;border-bottom:1px solid rgba(255,255,255,.06);flex-shrink:0}
+.sidebar-header h1{font-size:18px;font-weight:700;letter-spacing:-.02em;display:flex;align-items:center;gap:8px}
+.sidebar-header h1 .dot{width:8px;height:8px;border-radius:50%;background:var(--accent3);animation:pulse 2s ease infinite}
+.sidebar-header p{font-size:11px;color:var(--text3);margin-top:3px;font-family:'JetBrains Mono',monospace}
+.sidebar-body{flex:1;overflow-y:auto;padding:8px 10px;padding-bottom:calc(12px + var(--sab));-webkit-overflow-scrolling:touch;scrollbar-width:thin;scrollbar-color:var(--bg4) transparent}
+.sidebar-body::-webkit-scrollbar{width:3px}
+.sidebar-body::-webkit-scrollbar-thumb{background:var(--bg4);border-radius:3px}
+.layer-group{margin-bottom:4px}
+.layer-group-title{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.12em;color:var(--text3);padding:8px 8px 4px}
+.layer-card{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:var(--radius-sm);cursor:pointer;transition:background .15s;border:1px solid transparent;user-select:none;-webkit-tap-highlight-color:transparent;min-height:48px}
+.layer-card:active{background:rgba(255,255,255,.06)}
+.layer-card.active{background:rgba(56,189,248,.08);border-color:rgba(56,189,248,.18)}
+.layer-icon{width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0;background:var(--bg3)}
+.layer-card.active .layer-icon{background:rgba(56,189,248,.15)}
+.layer-info{flex:1;min-width:0}
+.layer-name{font-size:13px;font-weight:500}
+.layer-desc{font-size:10px;color:var(--text3);margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.layer-toggle{width:34px;height:18px;border-radius:9px;background:var(--bg4);position:relative;transition:background .2s;flex-shrink:0}
+.layer-card.active .layer-toggle{background:var(--accent)}
+.layer-toggle::after{content:'';position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:#fff;transition:transform .2s;box-shadow:0 1px 3px rgba(0,0,0,.3)}
+.layer-card.active .layer-toggle::after{transform:translateX(16px)}
+
+/* Info panel */
+#info-panel{position:absolute;top:calc(12px + var(--sat));right:calc(12px + var(--sar));z-index:999;display:flex;flex-direction:column;gap:6px;width:200px;max-height:calc(100% - 80px);overflow-y:auto;scrollbar-width:none;pointer-events:auto}
+#info-panel::-webkit-scrollbar{display:none}
+.info-card{background:var(--glass);backdrop-filter:blur(20px)saturate(1.6);border:1px solid rgba(255,255,255,.08);border-radius:var(--radius);padding:12px 14px;box-shadow:0 4px 20px rgba(0,0,0,.4);animation:slideIn .3s ease}
+.info-card-title{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--text3);margin-bottom:6px;display:flex;align-items:center;gap:5px}
+.info-card-title .ic{font-style:normal;font-size:13px}
+.info-val-row{display:flex;align-items:baseline;gap:4px}
+.info-val{font-size:26px;font-weight:700;font-family:'JetBrains Mono',monospace;line-height:1}
+.info-val .unit{font-size:12px;font-weight:400;color:var(--text2);margin-left:1px}
+.info-sub{font-size:10px;color:var(--text3);margin-left:auto}
+.mini-bar-wrap{margin-top:6px}
+.mini-bar-labels{display:flex;justify-content:space-between;font-size:8px;color:var(--text3);font-family:'JetBrains Mono',monospace;margin-bottom:2px}
+.mini-bar{width:100%;height:5px;border-radius:3px;position:relative;overflow:visible}
+.mini-bar-dot{position:absolute;top:50%;width:10px;height:10px;border-radius:50%;border:2px solid #fff;transform:translate(-50%,-50%);box-shadow:0 1px 4px rgba(0,0,0,.4)}
+.info-row{display:flex;gap:10px;margin-top:6px}
+.info-metric{flex:1}
+.info-metric-label{font-size:9px;color:var(--text3);text-transform:uppercase;letter-spacing:.04em}
+.info-metric-val{font-size:13px;font-weight:600;font-family:'JetBrains Mono',monospace;margin-top:1px}
+
+/* Legend */
+#legend{position:absolute;bottom:calc(16px + var(--sab));z-index:999;background:var(--glass);backdrop-filter:blur(20px);border:1px solid rgba(255,255,255,.08);border-radius:var(--radius-sm);padding:10px 12px;box-shadow:0 4px 16px rgba(0,0,0,.4);font-size:11px;max-width:180px;max-height:45vh;overflow-y:auto;display:none;left:calc(12px + var(--sal));scrollbar-width:thin;scrollbar-color:var(--bg4) transparent}
+#legend.show{display:block}
+#sidebar:not(.collapsed)~#legend{left:calc(var(--sidebar-w) + var(--sal) + 12px)}
+#legend h4{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--text3);margin-bottom:6px}
+.legend-item{display:flex;align-items:center;gap:6px;margin-bottom:3px;font-size:10px}
+.legend-color{width:12px;height:12px;border-radius:3px;flex-shrink:0}
+.legend-gradient{width:100%;height:8px;border-radius:3px;margin:4px 0}
+.legend-labels{display:flex;justify-content:space-between;font-size:9px;color:var(--text3)}
+.legend-src{font-size:8px;color:var(--text3);margin-top:2px;opacity:.6}
+
+/* FAB buttons - always above zoom */
+.fab-group{position:absolute;bottom:calc(100px + var(--sab));right:calc(10px + var(--sar));z-index:998;display:flex;flex-direction:column;gap:8px}
+.fab{width:44px;height:44px;border-radius:50%;background:var(--glass2);backdrop-filter:blur(16px);border:1px solid rgba(255,255,255,.1);color:var(--text);font-size:17px;cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:0 4px 16px rgba(0,0,0,.4);transition:all .15s;-webkit-tap-highlight-color:transparent}
+.fab:active{transform:scale(.9)}
+
+/* Toast notifications */
+#toast{position:absolute;top:calc(14px + var(--sat));left:50%;transform:translateX(-50%) translateY(-60px);z-index:2000;background:var(--glass2);backdrop-filter:blur(16px);border:1px solid rgba(255,255,255,.1);border-radius:20px;padding:8px 18px;font-size:12px;font-weight:500;color:var(--text2);box-shadow:0 4px 20px rgba(0,0,0,.5);transition:transform .3s cubic-bezier(.4,0,.2,1);white-space:nowrap;pointer-events:none;display:flex;align-items:center;gap:8px}
+#toast.show{transform:translateX(-50%) translateY(0)}
+#toast .spinner{width:14px;height:14px;border:2px solid var(--bg4);border-top-color:var(--accent);border-radius:50%;animation:spin .6s linear infinite;flex-shrink:0}
+
+/* Alert markers */
+.alert-icon{display:flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:50%;font-size:14px;border:2px solid rgba(255,255,255,.6);box-shadow:0 2px 8px rgba(0,0,0,.5)}
+
+/* Loading overlay */
+#loading-overlay{position:absolute;inset:0;z-index:9999;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;transition:opacity .5s ease}
+#loading-overlay.hidden{opacity:0;pointer-events:none}
+.loader{width:40px;height:40px;border:3px solid var(--bg3);border-top-color:var(--accent);border-radius:50%;animation:spin .7s linear infinite}
+#loading-text{font-size:13px;color:var(--text2)}
+.user-marker{width:18px;height:18px;border-radius:50%;background:var(--accent);border:3px solid #fff;box-shadow:0 0 0 6px rgba(56,189,248,.2),0 2px 6px rgba(0,0,0,.4);animation:userPulse 2s ease infinite}
+.user-marker-ring{position:absolute;width:50px;height:50px;border-radius:50%;border:2px solid rgba(56,189,248,.25);top:-16px;left:-16px;animation:ringExpand 3s ease infinite}
+
+/* Mobile */
+@media(max-width:640px){
+  :root{--sidebar-w:100vw}
+  #sidebar{border-right:none;width:100%}
+  #sidebar.collapsed{transform:translateX(-100%)}
+  #sidebar:not(.collapsed)~#sidebar-toggle{left:auto;right:calc(14px + var(--sar));top:calc(14px + var(--sat))}
+  #info-panel{width:160px;top:calc(10px + var(--sat));right:calc(10px + var(--sar));gap:5px}
+  .info-card{padding:10px 12px}
+  .info-val{font-size:22px}
+  #legend{max-width:160px;bottom:calc(14px + var(--sab));left:calc(10px + var(--sal))}
+  #sidebar:not(.collapsed)~#legend{display:none}
+  .fab-group{bottom:calc(90px + var(--sab));right:calc(8px + var(--sar))}
+  .leaflet-control-zoom{margin-bottom:8px!important}
+}
+@media(max-width:380px){
+  #info-panel{width:140px}
+  .info-val{font-size:20px}
+}
+
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes userPulse{0%,100%{box-shadow:0 0 0 6px rgba(56,189,248,.2),0 2px 6px rgba(0,0,0,.4)}50%{box-shadow:0 0 0 12px rgba(56,189,248,.06),0 2px 6px rgba(0,0,0,.4)}}
+@keyframes ringExpand{0%{transform:scale(.5);opacity:.7}100%{transform:scale(2.2);opacity:0}}
+@keyframes slideIn{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:translateY(0)}}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="loading-overlay"><div class="loader"></div><div id="loading-text">Locating…</div></div>
+  <div id="map"></div>
+  <div id="toast"><div class="spinner"></div><span id="toast-msg">Loading…</span></div>
+  <div id="sidebar" class="collapsed">
+    <div class="sidebar-header"><h1><span class="dot"></span> GeoLive</h1><p id="coords-display">Acquiring…</p></div>
+    <div class="sidebar-body">
+
+      <div class="layer-group"><div class="layer-group-title">Weather</div>
+        <div class="layer-card active" data-layer="precipitation" onclick="toggleLayer(this,'precipitation')"><div class="layer-icon">🌧️</div><div class="layer-info"><div class="layer-name">Precipitation</div><div class="layer-desc">RainViewer live radar</div></div><div class="layer-toggle"></div></div>
+        <div class="layer-card" data-layer="temperature" onclick="toggleLayer(this,'temperature')"><div class="layer-icon">🌡️</div><div class="layer-info"><div class="layer-name">Air Temperature</div><div class="layer-desc">Open-Meteo grid</div></div><div class="layer-toggle"></div></div>
+        <div class="layer-card" data-layer="wind" onclick="toggleLayer(this,'wind')"><div class="layer-icon">🌬️</div><div class="layer-info"><div class="layer-name">Wind</div><div class="layer-desc">Speed &amp; direction</div></div><div class="layer-toggle"></div></div>
+        <div class="layer-card" data-layer="clouds" onclick="toggleLayer(this,'clouds')"><div class="layer-icon">☁️</div><div class="layer-info"><div class="layer-name">Satellite Cloud</div><div class="layer-desc">VIIRS True Color</div></div><div class="layer-toggle"></div></div>
+      </div>
+
+      <div class="layer-group"><div class="layer-group-title">Air &amp; Health</div>
+        <div class="layer-card" data-layer="airquality" onclick="toggleLayer(this,'airquality')"><div class="layer-icon">😷</div><div class="layer-info"><div class="layer-name">Air Quality</div><div class="layer-desc">PM2.5 heatmap grid</div></div><div class="layer-toggle"></div></div>
+        <div class="layer-card" data-layer="pollen" onclick="toggleLayer(this,'pollen')"><div class="layer-icon">🌸</div><div class="layer-info"><div class="layer-name">Pollen Index</div><div class="layer-desc">Grass, birch, ragweed</div></div><div class="layer-toggle"></div></div>
+      </div>
+
+      <div class="layer-group"><div class="layer-group-title">Ocean &amp; Marine</div>
+        <div class="layer-card" data-layer="tide" onclick="toggleLayer(this,'tide')"><div class="layer-icon">🌊</div><div class="layer-info"><div class="layer-name">Tides &amp; Waves</div><div class="layer-desc">Per-point coastal data</div></div><div class="layer-toggle"></div></div>
+        <div class="layer-card" data-layer="sst" onclick="toggleLayer(this,'sst')"><div class="layer-icon">🌡️</div><div class="layer-info"><div class="layer-name">Sea Temperature</div><div class="layer-desc">GHRSST / GIBS SST</div></div><div class="layer-toggle"></div></div>
+        <div class="layer-card" data-layer="seamark" onclick="toggleLayer(this,'seamark')"><div class="layer-icon">⚓</div><div class="layer-info"><div class="layer-name">Sea Marks</div><div class="layer-desc">OpenSeaMap (zoom 9+)</div></div><div class="layer-toggle"></div></div>
+      </div>
+
+      <div class="layer-group"><div class="layer-group-title">Land &amp; Ecology</div>
+        <div class="layer-card" data-layer="vegetation" onclick="toggleLayer(this,'vegetation')"><div class="layer-icon">🌿</div><div class="layer-info"><div class="layer-name">Vegetation (NDVI)</div><div class="layer-desc">NASA MODIS Terra</div></div><div class="layer-toggle"></div></div>
+        <div class="layer-card" data-layer="lst" onclick="toggleLayer(this,'lst')"><div class="layer-icon">🌍</div><div class="layer-info"><div class="layer-name">Land Surface Temp</div><div class="layer-desc">NASA MODIS daytime</div></div><div class="layer-toggle"></div></div>
+        <div class="layer-card" data-layer="drought" onclick="toggleLayer(this,'drought')"><div class="layer-icon">🏜️</div><div class="layer-info"><div class="layer-name">Drought / Soil</div><div class="layer-desc">Soil moisture grid</div></div><div class="layer-toggle"></div></div>
+      </div>
+
+      <div class="layer-group"><div class="layer-group-title">Hazards</div>
+        <div class="layer-card" data-layer="alerts" onclick="toggleLayer(this,'alerts')"><div class="layer-icon">⚠️</div><div class="layer-info"><div class="layer-name">Disaster Alerts</div><div class="layer-desc">GDACS &amp; NWS</div></div><div class="layer-toggle"></div></div>
+        <div class="layer-card" data-layer="fire" onclick="toggleLayer(this,'fire')"><div class="layer-icon">🔥</div><div class="layer-info"><div class="layer-name">Fire Hotspots</div><div class="layer-desc">NASA MODIS+VIIRS</div></div><div class="layer-toggle"></div></div>
+      </div>
+
+      <div class="layer-group"><div class="layer-group-title">Urban</div>
+        <div class="layer-card" data-layer="lightpollution" onclick="toggleLayer(this,'lightpollution')"><div class="layer-icon">💡</div><div class="layer-info"><div class="layer-name">Night Lights</div><div class="layer-desc">VIIRS Black Marble</div></div><div class="layer-toggle"></div></div>
+        <div class="layer-card" data-layer="population" onclick="toggleLayer(this,'population')"><div class="layer-icon">👥</div><div class="layer-info"><div class="layer-name">Population Density</div><div class="layer-desc">GPWv4 SEDAC WMS</div></div><div class="layer-toggle"></div></div>
+      </div>
+
+      <div class="layer-group"><div class="layer-group-title">Base</div>
+        <div class="layer-card" data-layer="satellite" onclick="toggleLayer(this,'satellite')"><div class="layer-icon">🛰️</div><div class="layer-info"><div class="layer-name">Satellite Imagery</div><div class="layer-desc">ESRI World Imagery</div></div><div class="layer-toggle"></div></div>
+        <div class="layer-card active" data-layer="traffic" onclick="toggleLayer(this,'traffic')"><div class="layer-icon">🚗</div><div class="layer-info"><div class="layer-name">Roads</div><div class="layer-desc">OpenStreetMap</div></div><div class="layer-toggle"></div></div>
+      </div>
+
+    </div>
+  </div>
+  <button id="sidebar-toggle" onclick="document.getElementById('sidebar').classList.toggle('collapsed')" aria-label="Menu">☰</button>
+  <div id="info-panel"></div>
+  <div id="legend"></div>
+  <div class="fab-group">
+    <button class="fab" onclick="goHome()" title="My location">📍</button>
+  </div>
+</div>
+
+<script>
+/* ===== GLOBALS ===== */
+var map,userLat=30.25,userLon=120.16;
+var activeLayers=new Set(['precipitation','traffic']);
+var ML={},canvasLayers={};
+var weatherGrid=null,weatherCenter=null,marineGrid=null,tideData=null;
+var coastFeatures=null,rainPath=null,aqGrid=null,pollenData=null;
+var alertMarkers=null,alertData=[];
+var tempStats={min:0,max:35},windStats={min:0,max:40};
+var GRID=8,M_GRID=5,AQ_GRID=6;
+var ERR_TILE='data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+var _toastTimer=null,_loadCount=0;
+
+/* ===== TOAST ===== */
+function showToast(msg){
+  _loadCount++;
+  document.getElementById('toast-msg').textContent=msg;
+  document.getElementById('toast').classList.add('show');
+  if(_toastTimer)clearTimeout(_toastTimer);
+}
+function hideToast(){
+  _loadCount=Math.max(0,_loadCount-1);
+  if(_loadCount<=0){
+    _loadCount=0;
+    _toastTimer=setTimeout(function(){document.getElementById('toast').classList.remove('show');},300);
+  }
+}
+
+/* ===== UTILS ===== */
+function getLocation(){return new Promise(function(r){if(!navigator.geolocation)return r({lat:userLat,lon:userLon});navigator.geolocation.getCurrentPosition(function(p){r({lat:p.coords.latitude,lon:p.coords.longitude});},function(){r({lat:userLat,lon:userLon});},{enableHighAccuracy:true,timeout:6000});});}
+function gibsDate(d){var dt=new Date();dt.setDate(dt.getDate()-d);return dt.toISOString().split('T')[0];}
+function degToDir(d){return['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'][Math.round(d/22.5)%16];}
+function beaufort(k){var s=k/3.6;if(s<.3)return 0;if(s<1.6)return 1;if(s<3.4)return 2;if(s<5.5)return 3;if(s<8)return 4;if(s<10.8)return 5;if(s<13.9)return 6;if(s<17.2)return 7;if(s<20.8)return 8;if(s<24.5)return 9;if(s<28.5)return 10;if(s<32.7)return 11;return 12;}
+function goHome(){if(map)map.flyTo([userLat,userLon],map.getZoom(),{duration:.8});}
+
+/* find hour index closest to NOW */
+function findNowIdx(hourlyTimes){
+  if(!hourlyTimes||!hourlyTimes.length)return 0;
+  var now=Date.now();
+  for(var i=0;i<hourlyTimes.length;i++){if(new Date(hourlyTimes[i]).getTime()>=now)return Math.max(0,i-1);}
+  return hourlyTimes.length-1;
+}
+
+/* ===== WEATHER: fast current for info panel ===== */
+async function fetchCurrentWeather(){
+  try{
+    var r=await fetch('https://api.open-meteo.com/v1/forecast?latitude='+userLat+'&longitude='+userLon+'&current=temperature_2m,relative_humidity_2m,wind_speed_10m,wind_direction_10m&daily=temperature_2m_min,temperature_2m_max,wind_speed_10m_max&timezone=auto&forecast_days=3');
+    weatherCenter=await r.json();
+    if(weatherCenter.daily){
+      var tmin=999,tmax=-999,wmax=0;
+      weatherCenter.daily.temperature_2m_min.forEach(function(v){if(v!=null&&v<tmin)tmin=v;});
+      weatherCenter.daily.temperature_2m_max.forEach(function(v){if(v!=null&&v>tmax)tmax=v;});
+      weatherCenter.daily.wind_speed_10m_max.forEach(function(v){if(v!=null&&v>wmax)wmax=v;});
+      tempStats={min:tmin,max:tmax};windStats={min:0,max:wmax};
+    }
+  }catch(e){console.warn('Current weather:',e);}
+}
+
+/* ===== WEATHER GRID: for canvas overlays ===== */
+async function fetchWeatherGrid(){
+  showToast('Loading weather grid…');
+  var b=map.getBounds(),s=b.getSouth(),n=b.getNorth(),w=b.getWest(),e=b.getEast();
+  var pad=.12,lp=(n-s)*pad,op=(e-w)*pad;s-=lp;n+=lp;w-=op;e+=op;
+  var R=GRID,C=GRID,aL=[],aO=[],gLa=[],gLo=[];
+  for(var r=0;r<R;r++)gLa.push(s+(n-s)*r/(R-1));
+  for(var c=0;c<C;c++)gLo.push(w+(e-w)*c/(C-1));
+  for(var r=0;r<R;r++)for(var c=0;c<C;c++){aL.push(gLa[r].toFixed(2));aO.push(gLo[c].toFixed(2));}
+  try{
+    var resp=await fetch('https://api.open-meteo.com/v1/forecast?latitude='+aL.join(',')+'&longitude='+aO.join(',')+'&hourly=temperature_2m,relative_humidity_2m,wind_speed_10m,wind_direction_10m,soil_moisture_0_to_7cm,soil_moisture_7_to_28cm&timezone=auto&forecast_days=1');
+    var data=await resp.json();var arr=Array.isArray(data)?data:[data];
+    weatherGrid={rows:R,cols:C,south:s,north:n,west:w,east:e,data:arr};
+  }catch(ex){console.warn('Weather grid:',ex);}
+  hideToast();
+}
+
+function gridVal(f,i,r,c){var g=weatherGrid;if(!g)return null;var di=r*g.cols+c;if(!g.data[di]||!g.data[di].hourly||!g.data[di].hourly[f])return null;return g.data[di].hourly[f][i];}
+function gridInterp(f,i,lat,lon){
+  var g=weatherGrid;if(!g||g.rows<2||g.cols<2)return null;
+  var gy=(lat-g.south)/(g.north-g.south)*(g.rows-1),gx=(lon-g.west)/(g.east-g.west)*(g.cols-1);
+  gy=Math.max(0,Math.min(g.rows-1.001,gy));gx=Math.max(0,Math.min(g.cols-1.001,gx));
+  var iy=Math.floor(gy),ix=Math.floor(gx),fy=gy-iy,fx=gx-ix;
+  var a=gridVal(f,i,iy,ix),b=gridVal(f,i,iy,Math.min(ix+1,g.cols-1)),c2=gridVal(f,i,Math.min(iy+1,g.rows-1),ix),d=gridVal(f,i,Math.min(iy+1,g.rows-1),Math.min(ix+1,g.cols-1));
+  if(a==null)return null;b=b!=null?b:a;c2=c2!=null?c2:a;d=d!=null?d:a;
+  return a*(1-fx)*(1-fy)+b*fx*(1-fy)+c2*(1-fx)*fy+d*fx*fy;
+}
+function getNowHourIdx(){
+  if(!weatherGrid||!weatherGrid.data[0]||!weatherGrid.data[0].hourly)return 0;
+  return findNowIdx(weatherGrid.data[0].hourly.time);
+}
+
+/* ===== MARINE GRID 5×5 ===== */
+async function fetchMarineGrid(){
+  showToast('Loading marine data…');
+  var b=map.getBounds(),s=b.getSouth(),n=b.getNorth(),w=b.getWest(),e=b.getEast();
+  var pad=.1,lp=(n-s)*pad,op=(e-w)*pad;s-=lp;n+=lp;w-=op;e+=op;
+  var R=M_GRID,C=M_GRID,aL=[],aO=[];
+  var gLa=[],gLo=[];
+  for(var r=0;r<R;r++)gLa.push(s+(n-s)*r/(R-1));
+  for(var c=0;c<C;c++)gLo.push(w+(e-w)*c/(C-1));
+  for(var r=0;r<R;r++)for(var c=0;c<C;c++){aL.push(gLa[r].toFixed(2));aO.push(gLo[c].toFixed(2));}
+  try{
+    var resp=await fetch('https://marine-api.open-meteo.com/v1/marine?latitude='+aL.join(',')+'&longitude='+aO.join(',')+'&hourly=wave_height,wave_direction,wave_period&current=wave_height,wave_direction,wave_period&timezone=auto&forecast_days=1');
+    var data=await resp.json();var arr=Array.isArray(data)?data:[data];
+    marineGrid={rows:R,cols:C,south:s,north:n,west:w,east:e,data:arr};
+    // Set tideData to nearest valid point
+    var bd=Infinity,bi=-1;
+    for(var i=0;i<arr.length;i++){
+      if(!arr[i].hourly||!arr[i].hourly.wave_height)continue;
+      var hasValid=arr[i].hourly.wave_height.some(function(v){return v!=null&&v>0;});
+      if(!hasValid)continue;
+      var r2=Math.floor(i/C),c2=i%C;
+      var d2=(gLa[r2]-userLat)*(gLa[r2]-userLat)+(gLo[c2]-userLon)*(gLo[c2]-userLon);
+      if(d2<bd){bd=d2;bi=i;}
+    }
+    tideData=(bi>=0)?arr[bi]:null;
+    console.log('Marine grid:',R+'×'+C,', tideData:',tideData?'yes':'no');
+  }catch(e2){console.warn('Marine grid:',e2);}
+  hideToast();
+}
+
+function marineInterp(field,idx,lat,lon){
+  var g=marineGrid;if(!g)return null;
+  var gy=(lat-g.south)/(g.north-g.south)*(g.rows-1);
+  var gx=(lon-g.west)/(g.east-g.west)*(g.cols-1);
+  gy=Math.max(0,Math.min(g.rows-1.001,gy));gx=Math.max(0,Math.min(g.cols-1.001,gx));
+  var iy=Math.floor(gy),ix=Math.floor(gx),fy=gy-iy,fx=gx-ix;
+  function gv(r,c){var di=r*g.cols+c;if(!g.data[di]||!g.data[di].hourly||!g.data[di].hourly[field])return null;var v=g.data[di].hourly[field][idx];return(v!=null&&v>=0)?v:null;}
+  var a=gv(iy,ix),b=gv(iy,Math.min(ix+1,g.cols-1)),c2=gv(Math.min(iy+1,g.rows-1),ix),d=gv(Math.min(iy+1,g.rows-1),Math.min(ix+1,g.cols-1));
+  var vals=[a,b,c2,d].filter(function(v){return v!=null;});
+  if(vals.length===0)return null;
+  var avg=vals.reduce(function(s,v){return s+v;},0)/vals.length;
+  a=a!=null?a:avg;b=b!=null?b:avg;c2=c2!=null?c2:avg;d=d!=null?d:avg;
+  return a*(1-fx)*(1-fy)+b*fx*(1-fy)+c2*(1-fx)*fy+d*fx*fy;
+}
+function getMarineNowIdx(){
+  if(!marineGrid||!marineGrid.data[0]||!marineGrid.data[0].hourly)return 0;
+  return findNowIdx(marineGrid.data[0].hourly.time);
+}
+
+/* ===== AQ GRID 6×6 ===== */
+async function fetchAQGrid(){
+  showToast('Loading air quality…');
+  var b=map.getBounds(),s=b.getSouth(),n=b.getNorth(),w=b.getWest(),e=b.getEast();
+  var R=AQ_GRID,C=AQ_GRID,aL=[],aO=[];
+  for(var r=0;r<R;r++)for(var c=0;c<C;c++){
+    aL.push((s+(n-s)*(r+.5)/R).toFixed(2));aO.push((w+(e-w)*(c+.5)/C).toFixed(2));
+  }
+  try{
+    var resp=await fetch('https://air-quality-api.open-meteo.com/v1/air-quality?latitude='+aL.join(',')+'&longitude='+aO.join(',')+'&hourly=us_aqi,pm2_5&current=us_aqi,pm2_5&timezone=auto&forecast_days=1');
+    var data=await resp.json();var arr=Array.isArray(data)?data:[data];
+    aqGrid={rows:R,cols:C,south:s,north:n,west:w,east:e,data:arr};
+  }catch(e2){console.warn('AQ:',e2);}
+  hideToast();
+}
+function aqInterp(field,idx,lat,lon){
+  var g=aqGrid;if(!g)return null;
+  var gy=(lat-g.south)/(g.north-g.south)*(g.rows-1);
+  var gx=(lon-g.west)/(g.east-g.west)*(g.cols-1);
+  gy=Math.max(0,Math.min(g.rows-1.001,gy));gx=Math.max(0,Math.min(g.cols-1.001,gx));
+  var iy=Math.floor(gy),ix=Math.floor(gx),fy=gy-iy,fx=gx-ix;
+  function gv(r,c){var di=r*g.cols+c;if(!g.data[di]||!g.data[di].hourly||!g.data[di].hourly[field])return null;return g.data[di].hourly[field][idx];}
+  var a=gv(iy,ix),b=gv(iy,Math.min(ix+1,g.cols-1)),c2=gv(Math.min(iy+1,g.rows-1),ix),d=gv(Math.min(iy+1,g.rows-1),Math.min(ix+1,g.cols-1));
+  var vals=[a,b,c2,d].filter(function(v){return v!=null&&!isNaN(v);});
+  if(vals.length<2)return null;
+  var avg=vals.reduce(function(s,v){return s+v;},0)/vals.length;
+  a=a!=null?a:avg;b=b!=null?b:avg;c2=c2!=null?c2:avg;d=d!=null?d:avg;
+  return a*(1-fx)*(1-fy)+b*fx*(1-fy)+c2*(1-fx)*fy+d*fx*fy;
+}
+
+/* ===== POLLEN ===== */
+async function fetchPollen(){
+  showToast('Loading pollen data…');
+  try{var r=await fetch('https://air-quality-api.open-meteo.com/v1/air-quality?latitude='+userLat+'&longitude='+userLon+'&hourly=grass_pollen,birch_pollen,ragweed_pollen&current=european_aqi&timezone=auto&forecast_days=2');pollenData=await r.json();}catch(e){console.warn('Pollen:',e);}
+  hideToast();
+}
+
+/* ===== ALERTS ===== */
+async function fetchAlerts(){
+  showToast('Loading alerts…');alertData=[];
+  var c=map.getCenter();
+  try{var r=await fetch('https://api.weather.gov/alerts/active?point='+c.lat.toFixed(4)+','+c.lng.toFixed(4),{headers:{'User-Agent':'GeoLive','Accept':'application/geo+json'}});
+    if(r.ok){var d=await r.json();if(d.features)d.features.forEach(function(f){
+      var p=f.properties||{};var coords={lat:c.lat,lon:c.lng};
+      if(f.geometry&&f.geometry.type==='Polygon'&&f.geometry.coordinates[0]){
+        var pts=f.geometry.coordinates[0],cx=0,cy=0;pts.forEach(function(pt){cx+=pt[0];cy+=pt[1];});coords={lat:cy/pts.length,lon:cx/pts.length};}
+      alertData.push({lat:coords.lat,lon:coords.lon,title:p.headline||p.event||'Alert',severity:p.severity||'Unknown',type:'NWS',event:p.event||'',desc:(p.description||'').substring(0,200)});
+    });}
+  }catch(e){}
+  try{var r2=await fetch('https://www.gdacs.org/gdacsapi/api/events/geteventlist/SEARCH?alertlevel=Green;Orange;Red&eventlist=EQ;TC;FL;VO;DR;WF&fromDate='+gibsDate(60)+'&toDate='+gibsDate(0)+'&limit=50');
+    if(r2.ok){var d2=await r2.json();if(d2.features)d2.features.forEach(function(f){
+      var p=f.properties||{},g=f.geometry;
+      if(g&&g.coordinates)alertData.push({lat:g.coordinates[1],lon:g.coordinates[0],title:p.name||p.eventtype||'Event',severity:p.alertlevel==='Red'?'Extreme':p.alertlevel==='Orange'?'Severe':'Minor',type:'GDACS',event:p.eventtype||'',desc:'Alert: '+(p.alertlevel||'?')});
+    });}
+  }catch(e){}
+  console.log('Alerts:',alertData.length);renderAlertMarkers();hideToast();
+}
+function renderAlertMarkers(){
+  if(alertMarkers)try{map.removeLayer(alertMarkers);}catch(e){}
+  alertMarkers=L.layerGroup();
+  alertData.forEach(function(a){
+    var bg=a.severity==='Extreme'?'#ef4444':a.severity==='Severe'?'#f97316':'#fbbf24';
+    var em={'eq':'💥','tc':'🌀','fl':'🌊','vo':'🌋','wf':'🔥','dr':'🏜️'}[a.event.toLowerCase()]||'⚠️';
+    if(a.event.toLowerCase().indexOf('tornado')>=0)em='🌪️';if(a.event.toLowerCase().indexOf('thunder')>=0)em='⛈️';
+    var icon=L.divIcon({className:'',html:'<div class="alert-icon" style="background:'+bg+'">'+em+'</div>',iconSize:[28,28],iconAnchor:[14,14]});
+    var m=L.marker([a.lat,a.lon],{icon:icon,zIndexOffset:500});
+    m.bindPopup('<b>'+a.title+'</b><br><span style="color:'+bg+';font-weight:600">'+a.severity+' · '+a.type+'</span>'+(a.desc?'<br><small style="opacity:.7">'+a.desc+'</small>':''));
+    alertMarkers.addLayer(m);
+  });
+  if(activeLayers.has('alerts'))alertMarkers.addTo(map);
+}
+
+/* ===== RAINVIEWER ===== */
+async function fetchRainViewer(){
+  try{var r=await fetch('https://api.rainviewer.com/public/weather-maps.json');var d=await r.json();
+    if(d.radar&&d.radar.past&&d.radar.past.length)rainPath=d.radar.past[d.radar.past.length-1].path;
+  }catch(e){}
+}
+
+/* ===== COASTLINE ===== */
+async function fetchCoastline(){
+  showToast('Loading coastlines…');
+  var urls=['https://cdn.jsdelivr.net/npm/world-atlas@2/coastline-110m.json','https://unpkg.com/world-atlas@2/coastline-110m.json'];
+  for(var i=0;i<urls.length;i++){
+    try{var r=await fetch(urls[i]);if(!r.ok)continue;var raw=await r.json();
+      if(raw.type==='Topology'&&raw.objects){
+        if(typeof topojson!=='undefined'){var k=Object.keys(raw.objects)[0];coastFeatures=topojson.feature(raw,raw.objects[k]);console.log('Coast:',coastFeatures.features.length);hideToast();return;}
+        coastFeatures=decodeTopo(raw);if(coastFeatures){console.log('Coast(manual):',coastFeatures.features.length);hideToast();return;}
+      }
+      if(raw.type==='FeatureCollection'){coastFeatures=raw;hideToast();return;}
+    }catch(e){console.warn('Coast',i,e);}
+  }
+  console.warn('Coast: all sources failed');hideToast();
+}
+function decodeTopo(topo){
+  try{var k=Object.keys(topo.objects)[0],obj=topo.objects[k],arcs=topo.arcs,tf=topo.transform;
+    function dA(ai){var rev=ai<0,arc=arcs[rev?~ai:ai],cs=[],x=0,y=0;for(var i=0;i<arc.length;i++){x+=arc[i][0];y+=arc[i][1];var lo=x,la=y;if(tf){lo=lo*tf.scale[0]+tf.translate[0];la=la*tf.scale[1]+tf.translate[1];}cs.push([lo,la]);}if(rev)cs.reverse();return cs;}
+    function dG(g){if(g.type==='LineString'){var c=[];g.arcs.forEach(function(a){c=c.concat(dA(a));});return{type:'Feature',geometry:{type:'LineString',coordinates:c},properties:{}};}
+      if(g.type==='MultiLineString'){var ls=g.arcs.map(function(ring){var c=[];ring.forEach(function(a){c=c.concat(dA(a));});return c;});return{type:'Feature',geometry:{type:'MultiLineString',coordinates:ls},properties:{}};}
+      if(g.type==='Polygon'){var rings=g.arcs.map(function(ring){var c=[];ring.forEach(function(a){c=c.concat(dA(a));});return c;});return{type:'Feature',geometry:{type:'MultiLineString',coordinates:rings},properties:{}};}
+      return null;}
+    var fs=[];if(obj.type==='GeometryCollection')obj.geometries.forEach(function(g){var f=dG(g);if(f)fs.push(f);});else{var f=dG(obj);if(f)fs.push(f);}
+    return{type:'FeatureCollection',features:fs};
+  }catch(e){return null;}
+}
+
+/* ===== TILE LAYER FACTORIES ===== */
+function mkGIBS(layer,date,maxN,op){
+  return L.tileLayer('https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/'+layer+'/default/'+date+'/GoogleMapsCompatible_Level'+maxN+'/{z}/{y}/{x}.png',{maxZoom:18,maxNativeZoom:maxN,opacity:op||.7,errorTileUrl:ERR_TILE});
+}
+function createVegetationLayer(){return mkGIBS('MODIS_Terra_NDVI_8Day',gibsDate(12),9,.7);}
+function createLSTLayer(){return mkGIBS('MODIS_Terra_Land_Surface_Temp_Day',gibsDate(5),7,.65);}
+function createCloudLayer(){return L.tileLayer('https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/VIIRS_SNPP_CorrectedReflectance_TrueColor/default/'+gibsDate(1)+'/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg',{maxZoom:18,maxNativeZoom:9,opacity:.5,errorTileUrl:ERR_TILE});}
+function createNightLightsLayer(){return mkGIBS('VIIRS_Black_Marble','2016-01-01',8,.8);}
+
+/* SST: try multiple recent dates since MUR has ~2-4 day lag */
+function createSSTLayer(){
+  showToast('Loading sea temperature…');
+  var group=L.layerGroup();
+  [2,3,4,5].forEach(function(d){
+    var t=L.tileLayer('https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/GHRSST_L4_MUR_Sea_Surface_Temperature/default/'+gibsDate(d)+'/GoogleMapsCompatible_Level9/{z}/{y}/{x}.png',{maxZoom:18,maxNativeZoom:9,opacity:.75,errorTileUrl:ERR_TILE});
+    t.on('load',function(){hideToast();});
+    group.addLayer(t);
+  });
+  setTimeout(hideToast,8000);
+  return group;
+}
+
+/* Population: SEDAC GPW via direct CIESIN WMS (L.tileLayer.wms) + GIBS fallback */
+function createPopulationLayer(){
+  showToast('Loading population density…');
+  var group=L.layerGroup();
+  // Try SEDAC WMS (CIESIN Columbia)
+  var wms=L.tileLayer.wms('https://sedac.ciesin.columbia.edu/geoserver/gpw-v4-rev11/wms',{
+    layers:'gpw-v4-rev11:gpw-v4-population-density-adjusted-to-2015-unwpp-country-totals-rev11-2020',
+    format:'image/png',transparent:true,opacity:.6,version:'1.1.1',maxZoom:18
+  });
+  wms.on('tileerror',function(){
+    console.log('SEDAC WMS failed, trying GIBS…');
+    group.clearLayers();
+    // Fallback: GIBS SEDAC layer
+    var gibs=L.tileLayer('https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/SEDAC_POP_2000-2020-5YR_v4.11_DENSITY_2020/default/2020-01-01/GoogleMapsCompatible_Level7/{z}/{y}/{x}.png',{maxZoom:18,maxNativeZoom:7,opacity:.6,errorTileUrl:ERR_TILE});
+    gibs.on('tileerror',function(){
+      console.log('GIBS SEDAC also failed, trying alt name…');
+      group.clearLayers();
+      var alt=L.tileLayer('https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/GPW_Population_Density_2020/default/2020-01-01/GoogleMapsCompatible_Level7/{z}/{y}/{x}.png',{maxZoom:18,maxNativeZoom:7,opacity:.6,errorTileUrl:ERR_TILE});
+      group.addLayer(alt);
+    });
+    group.addLayer(gibs);
+  });
+  wms.on('load',function(){hideToast();});
+  group.addLayer(wms);
+  setTimeout(hideToast,8000);
+  return group;
+}
+
+/* SeaMarks: OpenSeaMap */
+function createSeaMarkLayer(){
+  showToast('Loading sea marks…');
+  var t=L.tileLayer('https://tiles.openseamap.org/seamark/{z}/{x}/{y}.png',{maxZoom:18,opacity:.9,errorTileUrl:ERR_TILE});
+  t.on('load',function(){hideToast();});
+  setTimeout(hideToast,5000);
+  return t;
+}
+
+/* Fire */
+function createFireLayers(){
+  var group=L.layerGroup();
+  ['MODIS_Terra_Thermal_Anomalies_Day','MODIS_Aqua_Thermal_Anomalies_Day','VIIRS_SNPP_Thermal_Anomalies_375m_Day','VIIRS_NOAA20_Thermal_Anomalies_375m_Day'].forEach(function(name){
+    var maxN=name.indexOf('VIIRS')>=0?10:8;
+    [1,2,3].forEach(function(d){group.addLayer(mkGIBS(name,gibsDate(d),maxN,1));});
+  });
+  return group;
+}
+
+/* ===== CANVAS OVERLAY ENGINE ===== */
+var CanvasOverlay=L.Layer.extend({
+  initialize:function(fn){this._fn=fn;},
+  onAdd:function(m){this._map=m;this._c=L.DomUtil.create('canvas','canvas-overlay',m.getPane('overlayPane'));this._ctx=this._c.getContext('2d');this._resize();m.on('moveend zoomend',this._render,this);m.on('move',this._repos,this);m.on('resize',this._resize,this);this._render();},
+  onRemove:function(m){L.DomUtil.remove(this._c);m.off('moveend zoomend',this._render,this);m.off('move',this._repos,this);m.off('resize',this._resize,this);},
+  _repos:function(){L.DomUtil.setPosition(this._c,this._map.containerPointToLayerPoint([0,0]));},
+  _resize:function(){var s=this._map.getSize();this._c.width=s.x;this._c.height=s.y;this._render();},
+  _render:function(){this._repos();this._ctx.clearRect(0,0,this._c.width,this._c.height);this._fn(this._ctx,this._c,this._map);},
+  redraw:function(){if(this._map)this._render();}
+});
+var AnimOverlay=L.Layer.extend({
+  initialize:function(fn){this._fn=fn;this._fc=0;},
+  onAdd:function(m){this._map=m;this._c=L.DomUtil.create('canvas','canvas-overlay',m.getPane('overlayPane'));this._ctx=this._c.getContext('2d');this._resize();m.on('move',this._repos,this);m.on('resize moveend zoomend',this._resize,this);this._running=true;this._loop();},
+  onRemove:function(m){this._running=false;L.DomUtil.remove(this._c);m.off('move',this._repos,this);m.off('resize moveend zoomend',this._resize,this);},
+  _repos:function(){L.DomUtil.setPosition(this._c,this._map.containerPointToLayerPoint([0,0]));},
+  _resize:function(){var s=this._map.getSize();this._c.width=s.x;this._c.height=s.y;},
+  _loop:function(){if(!this._running)return;this._fc++;if(this._fc%3===0){this._repos();this._ctx.clearRect(0,0,this._c.width,this._c.height);this._fn(this._ctx,this._c,this._map);}requestAnimationFrame(this._loop.bind(this));}
+});
+
+function getStep(){var z=map?map.getZoom():10;return z>=12?2:z>=8?3:5;}
+function renderHiRes(ctx,c,m,fn){
+  var S=getStep(),w=c.width,h=c.height,sw=Math.ceil(w/S),sh=Math.ceil(h/S);
+  var img=ctx.createImageData(sw,sh),d=img.data;
+  var b=m.getBounds(),so=b.getSouth(),no=b.getNorth(),we=b.getWest(),ea=b.getEast();
+  for(var py=0;py<sh;py++){var lat=no-(py/sh)*(no-so);for(var px=0;px<sw;px++){var lon=we+(px/sw)*(ea-we);var rgba=fn(lat,lon);var i=(py*sw+px)*4;d[i]=rgba[0];d[i+1]=rgba[1];d[i+2]=rgba[2];d[i+3]=rgba[3];}}
+  var off=document.createElement('canvas');off.width=sw;off.height=sh;off.getContext('2d').putImageData(img,0,0);
+  ctx.imageSmoothingEnabled=true;ctx.imageSmoothingQuality='high';ctx.drawImage(off,0,0,sw,sh,0,0,w,h);
+}
+
+/* ===== DRAW: TEMPERATURE ===== */
+function tempColor(t){if(t==null)return[0,0,0,0];var r,g,b;if(t<-10){r=20;g=40;b=180;}else if(t<0){var f=(t+10)/10;r=20+39*f;g=40+90*f;b=180+66*f;}else if(t<10){var f=t/10;r=59-25*f;g=130+81*f;b=246-8*f;}else if(t<20){var f=(t-10)/10;r=34+18*f;g=211;b=238-85*f;}else if(t<28){var f=(t-20)/8;r=52+198*f;g=211-7*f;b=153-132*f;}else if(t<35){var f=(t-28)/7;r=250-f;g=204-89*f;b=21+f;}else{r=239;g=68;b=68;}return[Math.round(r),Math.round(g),Math.round(b),55];}
+function drawTemp(ctx,c,m){if(!weatherGrid)return;var idx=getNowHourIdx();renderHiRes(ctx,c,m,function(lat,lon){return tempColor(gridInterp('temperature_2m',idx,lat,lon));});}
+
+/* ===== DRAW: WIND ===== */
+function drawWind(ctx,c,m){if(!weatherGrid)return;var idx=getNowHourIdx();var b=m.getBounds(),rows=10,cols=14;for(var i=0;i<rows;i++)for(var j=0;j<cols;j++){var lat=b.getSouth()+(b.getNorth()-b.getSouth())*((i+.5)/rows);var lon=b.getWest()+(b.getEast()-b.getWest())*((j+.5)/cols);var spd=gridInterp('wind_speed_10m',idx,lat,lon),dir=gridInterp('wind_direction_10m',idx,lat,lon);if(spd==null||dir==null)continue;var pt=m.latLngToContainerPoint([lat,lon]);var alpha=Math.min(.85,.2+spd/45),len=Math.max(8,Math.min(24,spd*.8));ctx.save();ctx.translate(pt.x,pt.y);ctx.rotate(dir*Math.PI/180+Math.PI);ctx.beginPath();ctx.moveTo(0,-len);ctx.lineTo(-len*.25,len*.3);ctx.lineTo(0,len*.15);ctx.lineTo(len*.25,len*.3);ctx.closePath();ctx.fillStyle='rgba(148,211,247,'+alpha+')';ctx.fill();ctx.restore();}}
+
+/* ===== DRAW: DROUGHT ===== */
+function droughtColor(n){var r,g,b;if(n<.15){r=180;g=50;b=20;}else if(n<.3){var f=(n-.15)/.15;r=180+40*f;g=50+100*f;b=20+20*f;}else if(n<.5){var f=(n-.3)/.2;r=220-80*f;g=150+30*f;b=40+40*f;}else if(n<.7){var f=(n-.5)/.2;r=140-80*f;g=180+10*f;b=80+40*f;}else{var f=(n-.7)/.3;r=60-30*f;g=190-60*f;b=120+80*f;}return[Math.round(r),Math.round(g),Math.round(b),75];}
+function drawDrought(ctx,c,m){if(!weatherGrid)return;var idx=getNowHourIdx();var s=gridVal('soil_moisture_0_to_7cm',idx,0,0);if(s!=null){renderHiRes(ctx,c,m,function(lat,lon){var a=gridInterp('soil_moisture_0_to_7cm',idx,lat,lon),b2=gridInterp('soil_moisture_7_to_28cm',idx,lat,lon);if(a==null)return[0,0,0,0];var v=b2!=null?(a*.4+b2*.6):a;return droughtColor(Math.min(1,v/.35));});}else{renderHiRes(ctx,c,m,function(lat,lon){var h=gridInterp('relative_humidity_2m',idx,lat,lon);if(h==null)return[0,0,0,0];return droughtColor(h/100*.8);});}}
+
+/* ===== DRAW: AQ ===== */
+function aqColor(v){if(v==null)return[0,0,0,0];if(v<=25)return[52,211,153,35];if(v<=50)return[52,211,153,50];if(v<=75)return[251,191,36,50];if(v<=100)return[251,191,36,65];if(v<=150)return[249,115,22,65];if(v<=200)return[239,68,68,75];return[168,85,247,80];}
+function drawAQ(ctx,c,m){if(!aqGrid)return;var idx=0;if(aqGrid.data[0]&&aqGrid.data[0].hourly&&aqGrid.data[0].hourly.time)idx=findNowIdx(aqGrid.data[0].hourly.time);renderHiRes(ctx,c,m,function(lat,lon){return aqColor(aqInterp('us_aqi',idx,lat,lon));});}
+
+/* ===== DRAW: TIDE — clear heatmap + labels ===== */
+function tideHeatColor(wh,minH,maxH){
+  // Green (calm) → Yellow (moderate) → Red (rough) → Magenta (extreme)
+  if(maxH<=minH)return{r:56,g:189,b:248,a:.6};
+  var n=(wh-minH)/(maxH-minH);n=Math.max(0,Math.min(1,n));
+  var r,g,b;
+  if(n<.33){var f=n/.33;r=52+152*f;g=211-65*f;b=153-113*f;}      // green→yellow
+  else if(n<.66){var f=(n-.33)/.33;r=204+35*f;g=146-78*f;b=40-10*f;} // yellow→red
+  else{var f=(n-.66)/.34;r=239;g=68-20*f;b=30+170*f;}               // red→magenta
+  return{r:Math.round(r),g:Math.round(g),b:Math.round(b),a:.45+n*.4};
+}
+
+function drawTideFrame(ctx,c,m){
+  if(!coastFeatures||!coastFeatures.features||!coastFeatures.features.length){
+    if(tideData&&tideData.current){
+      ctx.save();ctx.font='bold 13px "JetBrains Mono",monospace';ctx.fillStyle='rgba(56,189,248,.4)';ctx.textAlign='center';
+      ctx.fillText('Wave: '+(tideData.current.wave_height||0).toFixed(1)+'m — Loading coastline…',c.width/2,c.height/2);ctx.restore();}
+    return;
+  }
+
+  var timeIdx=getMarineNowIdx();
+  var t=Date.now()/1000;
+  var bounds=m.getBounds();
+  var pad=.05,sth=bounds.getSouth()-(bounds.getNorth()-bounds.getSouth())*pad,nth=bounds.getNorth()+(bounds.getNorth()-bounds.getSouth())*pad;
+  var wst=bounds.getWest()-(bounds.getEast()-bounds.getWest())*pad,est=bounds.getEast()+(bounds.getEast()-bounds.getWest())*pad;
+
+  // Phase 1: collect all visible segments with per-point wave heights
+  var allSegs=[];var globalMin=999,globalMax=0;
+
+  for(var fi=0;fi<coastFeatures.features.length;fi++){
+    var geom=coastFeatures.features[fi].geometry;if(!geom)continue;
+    var coordSets=geom.type==='MultiLineString'?geom.coordinates:(geom.type==='LineString'?[geom.coordinates]:(geom.type==='Polygon'?geom.coordinates:[]));
+    for(var si=0;si<coordSets.length;si++){
+      var coords=coordSets[si],seg={pts:[],lls:[],whs:[]};
+      for(var ci=0;ci<coords.length;ci++){
+        var cLon=coords[ci][0],cLat=coords[ci][1];
+        if(cLat<sth||cLat>nth||cLon<wst||cLon>est){
+          if(seg.pts.length>1){allSegs.push(seg);}seg={pts:[],lls:[],whs:[]};continue;
+        }
+        var pt=m.latLngToContainerPoint([cLat,cLon]);
+        var wh=marineInterp('wave_height',timeIdx,cLat,cLon);
+        if(wh==null&&tideData&&tideData.current)wh=tideData.current.wave_height||0;
+        if(wh==null)wh=0;
+        if(wh<globalMin)globalMin=wh;if(wh>globalMax)globalMax=wh;
+        seg.pts.push(pt);seg.lls.push([cLat,cLon]);seg.whs.push(wh);
+      }
+      if(seg.pts.length>1)allSegs.push(seg);
+    }
+  }
+  if(allSegs.length===0)return;
+  if(globalMin>=globalMax){globalMin=0;globalMax=Math.max(globalMax,1);}
+
+  // Phase 2: draw each segment
+  for(var si=0;si<allSegs.length;si++){
+    var seg=allSegs[si],pts=seg.pts,whs=seg.whs;
+    var dists=[0];
+    for(var i=1;i<pts.length;i++)dists.push(dists[i-1]+Math.sqrt((pts[i].x-pts[i-1].x)*(pts[i].x-pts[i-1].x)+(pts[i].y-pts[i-1].y)*(pts[i].y-pts[i-1].y)));
+    if(dists[dists.length-1]<3)continue;
+
+    // Draw colored coastline
+    for(var i=0;i<pts.length-1;i++){
+      var wh=(whs[i]+whs[i+1])/2;
+      var col=tideHeatColor(wh,globalMin,globalMax);
+      var norm=(wh-globalMin)/(globalMax-globalMin||1);
+      ctx.beginPath();ctx.moveTo(pts[i].x,pts[i].y);ctx.lineTo(pts[i+1].x,pts[i+1].y);
+      ctx.strokeStyle='rgba('+col.r+','+col.g+','+col.b+','+col.a+')';
+      ctx.lineWidth=2+norm*4;ctx.lineCap='round';ctx.stroke();
+    }
+
+    // Animated wave glow
+    for(var i=0;i<pts.length;i++){
+      var wh=whs[i],norm=(wh-globalMin)/(globalMax-globalMin||1);
+      var nm=tideNrm(pts,i);
+      var reach=6+norm*25;
+      var phase=dists[i]*.06+t/6*2;
+      var osc=Math.sin(phase)*(2+norm*8);
+      var px=pts[i].x+nm[0]*(reach+osc),py=pts[i].y+nm[1]*(reach+osc);
+      var col=tideHeatColor(wh,globalMin,globalMax);
+      ctx.beginPath();ctx.arc(px,py,1+norm*2.5,0,Math.PI*2);
+      ctx.fillStyle='rgba('+col.r+','+col.g+','+col.b+','+(col.a*.4)+')';ctx.fill();
+    }
+
+    // Labels every ~250px
+    var nextL=120;var segMinI=0,segMaxI=0;
+    for(var i=1;i<whs.length;i++){if(whs[i]<whs[segMinI])segMinI=i;if(whs[i]>whs[segMaxI])segMaxI=i;}
+
+    for(var i=1;i<pts.length;i++){
+      if(dists[i]<nextL&&i!==segMinI&&i!==segMaxI)continue;
+      var wh=whs[i];var nm=tideNrm(pts,i);
+      var norm=(wh-globalMin)/(globalMax-globalMin||1);
+      var col=tideHeatColor(wh,globalMin,globalMax);
+      var isMin=(i===segMinI&&dists[dists.length-1]>80);
+      var isMax=(i===segMaxI&&dists[dists.length-1]>80);
+      var lx=pts[i].x+nm[0]*(10+norm*28+18),ly=pts[i].y+nm[1]*(10+norm*28+18);
+
+      var label=wh.toFixed(1)+'m';
+      var tag=isMin?'▾ LOW':isMax?'▴ HIGH':(norm>.66?'▴':norm<.33?'▾':'');
+
+      ctx.save();ctx.font=(isMin||isMax?'bold ':'')+'9px "JetBrains Mono",monospace';
+      var tw=ctx.measureText(label+' '+tag).width+10;
+      ctx.fillStyle=isMin?'rgba(0,40,20,.75)':isMax?'rgba(60,0,0,.75)':'rgba(0,15,40,.7)';
+      ctx.beginPath();
+      if(ctx.roundRect)ctx.roundRect(lx-tw/2,ly-9,tw,18,5);else ctx.rect(lx-tw/2,ly-9,tw,18);
+      ctx.fill();
+      if(isMin||isMax){ctx.strokeStyle='rgba('+col.r+','+col.g+','+col.b+',.6)';ctx.lineWidth=1;ctx.stroke();}
+      ctx.fillStyle='rgba('+col.r+','+col.g+','+col.b+','+(isMin||isMax?1:.85)+')';
+      ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(label+' '+tag,lx,ly);
+      ctx.restore();
+      nextL=dists[i]+250;
+    }
+  }
+}
+function tideNrm(pts,i){var dx=0,dy=0;if(i<pts.length-1){dx=pts[i+1].x-pts[i].x;dy=pts[i+1].y-pts[i].y;}else if(i>0){dx=pts[i].x-pts[i-1].x;dy=pts[i].y-pts[i-1].y;}var l=Math.sqrt(dx*dx+dy*dy)||1;return[-dy/l,dx/l];}
+
+/* ===== INFO PANEL ===== */
+function renderInfoPanel(){
+  var panel=document.getElementById('info-panel');
+  if(!weatherCenter||!weatherCenter.current){panel.innerHTML='';return;}
+  var cur=weatherCenter.current;var cards='';
+
+  // Temp
+  var temp=cur.temperature_2m,hum=cur.relative_humidity_2m;
+  var tPct=tempStats.max>tempStats.min?((temp-tempStats.min)/(tempStats.max-tempStats.min)*100):50;
+  tPct=Math.max(0,Math.min(100,tPct));var tC=temp<10?'#3b82f6':temp<25?'#34d399':'#f97316';
+  cards+='<div class="info-card"><div class="info-card-title"><i class="ic">🌡️</i> Temperature</div><div class="info-val-row"><div class="info-val">'+(temp!=null?temp.toFixed(1):'--')+'<span class="unit">°C</span></div><div class="info-sub">'+(hum!=null?hum+'%':'')+'</div></div><div class="mini-bar-wrap"><div class="mini-bar-labels"><span>'+tempStats.min.toFixed(0)+'°</span><span>3d</span><span>'+tempStats.max.toFixed(0)+'°</span></div><div class="mini-bar" style="background:linear-gradient(to right,#3b82f6,#34d399,#f97316)"><div class="mini-bar-dot" style="left:'+tPct+'%;background:'+tC+'"></div></div></div></div>';
+
+  // Wind
+  var ws=cur.wind_speed_10m,wd=cur.wind_direction_10m;
+  var wPct=windStats.max>0?(ws/windStats.max*100):0;wPct=Math.min(100,wPct);var wC=ws<15?'#34d399':ws<35?'#facc15':'#ef4444';
+  cards+='<div class="info-card"><div class="info-card-title"><i class="ic">🌬️</i> Wind</div><div class="info-val-row"><div class="info-val">'+(ws!=null?ws.toFixed(1):'--')+'<span class="unit">km/h</span></div><div class="info-sub">'+(wd!=null?degToDir(wd):'-')+'</div></div><div class="info-row"><div class="info-metric"><div class="info-metric-label">Dir</div><div class="info-metric-val">'+(wd!=null?wd+'°':'-')+'</div></div><div class="info-metric"><div class="info-metric-label">Bft</div><div class="info-metric-val">'+(ws!=null?beaufort(ws):'-')+'</div></div></div></div>';
+
+  // Tide (if active and available)
+  if(activeLayers.has('tide')&&tideData&&tideData.current){
+    var wh=tideData.current.wave_height||0;
+    var wp=tideData.current.wave_period||0;
+    cards+='<div class="info-card"><div class="info-card-title"><i class="ic">🌊</i> Waves</div><div class="info-val-row"><div class="info-val">'+wh.toFixed(1)+'<span class="unit">m</span></div><div class="info-sub">'+(wp>0?wp.toFixed(0)+'s':'')+'</div></div></div>';
+  }
+
+  // AQ
+  if(activeLayers.has('airquality')&&aqGrid){
+    var cp=aqGrid.data[Math.floor(aqGrid.data.length/2)];
+    if(cp&&cp.current&&cp.current.us_aqi!=null){
+      var aqi=cp.current.us_aqi,pm=cp.current.pm2_5;
+      var ac=aqi<=50?'#34d399':aqi<=100?'#fbbf24':aqi<=150?'#f97316':aqi<=200?'#ef4444':'#a855f7';
+      var al=aqi<=50?'Good':aqi<=100?'Moderate':aqi<=150?'USG':aqi<=200?'Unhealthy':'V.Unhealthy';
+      cards+='<div class="info-card"><div class="info-card-title"><i class="ic">😷</i> AQI</div><div class="info-val-row"><div class="info-val" style="color:'+ac+'">'+aqi+'</div><div class="info-sub">'+al+'</div></div>'+(pm!=null?'<div class="info-metric" style="margin-top:4px"><div class="info-metric-label">PM2.5</div><div class="info-metric-val">'+pm.toFixed(1)+'</div></div>':'')+'</div>';
+    }
+  }
+
+  // Pollen
+  if(activeLayers.has('pollen')&&pollenData&&pollenData.hourly){
+    var ph=pollenData.hourly,pi=findNowIdx(ph.time||[]);
+    var gr=ph.grass_pollen?ph.grass_pollen[pi]:0;var bi=ph.birch_pollen?ph.birch_pollen[pi]:0;var ra=ph.ragweed_pollen?ph.ragweed_pollen[pi]:0;
+    var mx=Math.max(gr||0,bi||0,ra||0);var pc=mx>80?'#ef4444':mx>40?'#f97316':mx>15?'#fbbf24':'#34d399';
+    cards+='<div class="info-card"><div class="info-card-title"><i class="ic">🌸</i> Pollen</div><div class="info-val-row"><div class="info-val" style="color:'+pc+'">'+Math.round(mx)+'<span class="unit">gr/m³</span></div></div><div class="info-row"><div class="info-metric"><div class="info-metric-label">Grass</div><div class="info-metric-val">'+Math.round(gr||0)+'</div></div><div class="info-metric"><div class="info-metric-label">Birch</div><div class="info-metric-val">'+Math.round(bi||0)+'</div></div><div class="info-metric"><div class="info-metric-label">Ragw</div><div class="info-metric-val">'+Math.round(ra||0)+'</div></div></div></div>';
+  }
+
+  panel.innerHTML=cards;
+}
+
+/* ===== LEGEND ===== */
+function updateLegend(){
+  var el=document.getElementById('legend'),html='',show=false;
+  if(activeLayers.has('temperature')){show=true;html+='<h4>Temperature</h4><div class="legend-gradient" style="background:linear-gradient(to right,#1428b4,#3b82f6,#22d3ee,#34d399,#facc15,#f97316,#ef4444)"></div><div class="legend-labels"><span>-10°C</span><span>35+</span></div>';}
+  if(activeLayers.has('drought')){show=true;html+='<h4 style="margin-top:8px">Soil Moisture</h4><div class="legend-gradient" style="background:linear-gradient(to right,#b43214,#dca028,#8cb450,#2864c8)"></div><div class="legend-labels"><span>Drought</span><span>Wet</span></div>';}
+  if(activeLayers.has('airquality')){show=true;html+='<h4 style="margin-top:8px">AQI</h4><div style="display:flex;gap:2px;margin:3px 0"><div style="flex:1;height:6px;border-radius:2px;background:#34d399"></div><div style="flex:1;height:6px;border-radius:2px;background:#fbbf24"></div><div style="flex:1;height:6px;border-radius:2px;background:#f97316"></div><div style="flex:1;height:6px;border-radius:2px;background:#ef4444"></div><div style="flex:1;height:6px;border-radius:2px;background:#a855f7"></div></div><div class="legend-labels"><span>Good</span><span>Hazardous</span></div>';}
+  if(activeLayers.has('tide')){show=true;html+='<h4 style="margin-top:8px">Wave Height</h4><div class="legend-gradient" style="background:linear-gradient(to right,#34d399,#dca028,#ef4444,#c084fc)"></div><div class="legend-labels"><span>▾ Calm</span><span>▴ Rough</span></div>';}
+  if(activeLayers.has('sst')){show=true;html+='<h4 style="margin-top:8px">Sea Temp</h4><div class="legend-gradient" style="background:linear-gradient(to right,#1e3a8a,#22d3ee,#facc15,#ef4444)"></div><div class="legend-labels"><span>Cold</span><span>Warm</span></div><div class="legend-src">GHRSST MUR GIBS</div>';}
+  if(activeLayers.has('seamark')){show=true;html+='<h4 style="margin-top:8px">Sea Marks</h4><div class="legend-src">OpenSeaMap — zoom 9+</div>';}
+  if(activeLayers.has('fire')){show=true;html+='<h4 style="margin-top:8px">Fires</h4><div class="legend-item"><div class="legend-color" style="background:#ff4500"></div><span>Thermal anomaly</span></div>';}
+  if(activeLayers.has('alerts')&&alertData.length>0){show=true;html+='<h4 style="margin-top:8px">Alerts ('+alertData.length+')</h4><div class="legend-item"><div class="legend-color" style="background:#ef4444"></div><span>Extreme</span></div><div class="legend-item"><div class="legend-color" style="background:#fbbf24"></div><span>Minor</span></div>';}
+  if(activeLayers.has('lightpollution')){show=true;html+='<h4 style="margin-top:8px">Night Lights</h4><div class="legend-gradient" style="background:linear-gradient(to right,#0a0e17,#f59e0b)"></div><div class="legend-labels"><span>Dark</span><span>Bright</span></div>';}
+  if(activeLayers.has('population')){show=true;html+='<h4 style="margin-top:8px">Population</h4><div class="legend-src">GPWv4 SEDAC</div>';}
+  if(activeLayers.has('vegetation')){show=true;html+='<h4 style="margin-top:8px">NDVI</h4><div class="legend-gradient" style="background:linear-gradient(to right,#c2b280,#1b5e20)"></div><div class="legend-labels"><span>Barren</span><span>Dense</span></div>';}
+  if(activeLayers.has('precipitation')){show=true;html+='<h4 style="margin-top:8px">Rain</h4><div class="legend-gradient" style="background:linear-gradient(to right,rgba(0,100,255,.2),rgba(255,255,0,.6),rgba(255,0,0,.7))"></div><div class="legend-labels"><span>Light</span><span>Heavy</span></div>';}
+  el.innerHTML=html;el.classList.toggle('show',show);
+}
+
+/* ===== LAYER TOGGLE ===== */
+var _needsWeatherGrid=new Set(['temperature','wind','drought']);
+var _tileMap={vegetation:'vegetation',lst:'lst',clouds:'clouds',lightpollution:'nightlights',sst:'sst',population:'population',seamark:'seamark'};
+
+function toggleLayer(el,name){
+  el.classList.toggle('active');var on=el.classList.contains('active');
+  if(on)activeLayers.add(name);else activeLayers.delete(name);
+
+  if(name==='satellite'){if(on){map.removeLayer(ML.dark);ML.satellite.addTo(map);}else{try{map.removeLayer(ML.satellite);}catch(e){}ML.dark.addTo(map);}}
+  if(name==='traffic'){if(on)ML.traffic.addTo(map);else try{map.removeLayer(ML.traffic);}catch(e){}}
+
+  // Tile layers (lazy create)
+  if(_tileMap[name]){
+    var k=_tileMap[name];
+    if(on){
+      if(!ML[k]){
+        if(name==='vegetation')ML[k]=createVegetationLayer();
+        else if(name==='lst')ML[k]=createLSTLayer();
+        else if(name==='clouds')ML[k]=createCloudLayer();
+        else if(name==='lightpollution')ML[k]=createNightLightsLayer();
+        else if(name==='sst')ML[k]=createSSTLayer();
+        else if(name==='population')ML[k]=createPopulationLayer();
+        else if(name==='seamark')ML[k]=createSeaMarkLayer();
+      }
+      ML[k].addTo(map);
+    }else if(ML[k])try{map.removeLayer(ML[k]);}catch(e){}
+  }
+
+  if(name==='fire'){if(on){if(!ML.fire)ML.fire=createFireLayers();ML.fire.addTo(map);}else if(ML.fire)try{map.removeLayer(ML.fire);}catch(e){}}
+  if(name==='precipitation'){if(on&&ML.precip)ML.precip.addTo(map);else if(ML.precip)try{map.removeLayer(ML.precip);}catch(e){}}
+
+  // Canvas layers that need weather grid
+  if(_needsWeatherGrid.has(name)){
+    if(on){
+      if(!weatherGrid)fetchWeatherGrid().then(function(){
+        if(canvasLayers[name]&&canvasLayers[name]._map)canvasLayers[name].redraw();
+      });
+      if(!canvasLayers[name]){
+        if(name==='temperature')canvasLayers[name]=new CanvasOverlay(drawTemp);
+        if(name==='wind')canvasLayers[name]=new CanvasOverlay(drawWind);
+        if(name==='drought')canvasLayers[name]=new CanvasOverlay(drawDrought);
+      }
+      canvasLayers[name].addTo(map);
+    }else if(canvasLayers[name])try{map.removeLayer(canvasLayers[name]);}catch(e){}
+  }
+
+  if(name==='airquality'){
+    if(on){
+      if(!canvasLayers.aq)canvasLayers.aq=new CanvasOverlay(drawAQ);
+      canvasLayers.aq.addTo(map);
+      if(!aqGrid)fetchAQGrid().then(function(){if(canvasLayers.aq&&canvasLayers.aq._map)canvasLayers.aq.redraw();});
+    }else if(canvasLayers.aq)try{map.removeLayer(canvasLayers.aq);}catch(e){}
+  }
+
+  if(name==='tide'){
+    if(on){
+      if(!canvasLayers.tide)canvasLayers.tide=new AnimOverlay(drawTideFrame);
+      canvasLayers.tide.addTo(map);
+      var proms=[];
+      if(!marineGrid)proms.push(fetchMarineGrid());
+      if(!coastFeatures)proms.push(fetchCoastline());
+      if(proms.length)Promise.allSettled(proms);
+    }else if(canvasLayers.tide)try{map.removeLayer(canvasLayers.tide);}catch(e){}
+  }
+
+  if(name==='pollen'){if(on&&!pollenData)fetchPollen().then(renderInfoPanel);}
+  if(name==='alerts'){if(on)fetchAlerts();else if(alertMarkers)try{map.removeLayer(alertMarkers);}catch(e){}}
+
+  refreshAll();
+}
+
+/* ===== REFRESH ===== */
+function refreshAll(){
+  renderInfoPanel();
+  ['temperature','wind','drought'].forEach(function(k){if(canvasLayers[k]&&canvasLayers[k]._map)canvasLayers[k].redraw();});
+  if(canvasLayers.aq&&canvasLayers.aq._map)canvasLayers.aq.redraw();
+  updateLegend();
+}
+var _refetchTimer=null;
+function scheduleRefetch(){
+  if(_refetchTimer)clearTimeout(_refetchTimer);
+  _refetchTimer=setTimeout(async function(){
+    var any=false;
+    _needsWeatherGrid.forEach(function(k){if(activeLayers.has(k))any=true;});
+    if(any)await fetchWeatherGrid();
+    if(activeLayers.has('airquality'))fetchAQGrid().then(function(){if(canvasLayers.aq&&canvasLayers.aq._map)canvasLayers.aq.redraw();});
+    if(activeLayers.has('tide'))fetchMarineGrid();
+    refreshAll();
+  },2500);
+}
+
+/* ===== INIT ===== */
+async function init(){
+  var lt=document.getElementById('loading-text');
+  lt.textContent='Acquiring location…';
+  var loc=await getLocation();userLat=loc.lat;userLon=loc.lon;
+
+  lt.textContent='Initializing…';
+  map=L.map('map',{center:[userLat,userLon],zoom:10,zoomControl:false,attributionControl:false,preferCanvas:true});
+  L.control.zoom({position:'bottomright'}).addTo(map);
+  ML.dark=L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{maxZoom:19,subdomains:'abcd'}).addTo(map);
+  ML.satellite=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{maxZoom:18,opacity:.85});
+  ML.traffic=L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,opacity:.35}).addTo(map);
+
+  // User marker
+  var uI=L.divIcon({className:'',html:'<div class="user-marker"><div class="user-marker-ring"></div></div>',iconSize:[18,18],iconAnchor:[9,9]});
+  L.marker([userLat,userLon],{icon:uI,zIndexOffset:9999}).addTo(map);
+
+  document.getElementById('coords-display').textContent=userLat.toFixed(4)+'°N  '+userLon.toFixed(4)+'°E';
+
+  lt.textContent='Loading…';
+  // Only fetch what's needed for default view (precipitation + current weather)
+  await Promise.allSettled([fetchCurrentWeather(),fetchRainViewer()]);
+
+  if(rainPath){
+    ML.precip=L.tileLayer('https://tilecache.rainviewer.com'+rainPath+'/256/{z}/{x}/{y}/2/1_1.png',{opacity:.6,maxZoom:18});
+    ML.precip.addTo(map);
+  }
+
+  refreshAll();
+  map.on('moveend',scheduleRefetch);
+  setTimeout(function(){document.getElementById('loading-overlay').classList.add('hidden');},300);
+
+  // Background: preload coastline for when tide is needed
+  fetchCoastline();
+
+  // Periodic refresh (10 min)
+  setInterval(async function(){
+    await fetchCurrentWeather();await fetchRainViewer();
+    if(ML.precip&&ML.precip._map)map.removeLayer(ML.precip);
+    if(rainPath){ML.precip=L.tileLayer('https://tilecache.rainviewer.com'+rainPath+'/256/{z}/{x}/{y}/2/1_1.png',{opacity:.6,maxZoom:18});if(activeLayers.has('precipitation'))ML.precip.addTo(map);}
+    refreshAll();
+  },600000);
+}
+
+/* ===== TOPOJSON BOOT ===== */
+(function(){
+  if(typeof topojson!=='undefined'){init();return;}
+  var s=document.createElement('script');
+  s.src='https://cdn.jsdelivr.net/npm/topojson-client@3/dist/topojson-client.min.js';
+  s.onload=init;s.onerror=function(){console.warn('topojson lib failed');init();};
+  document.head.appendChild(s);
+})();
+</script>
+</body>
+</html>
