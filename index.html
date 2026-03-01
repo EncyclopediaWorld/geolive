@@ -187,7 +187,7 @@ html,body{height:100%;overflow:hidden;font-family:'DM Sans',sans-serif;backgroun
 
       <div class="layer-group"><div class="layer-group-title">Base</div>
         <div class="layer-card" data-layer="satellite" onclick="toggleLayer(this,'satellite')"><div class="layer-icon">🛰️</div><div class="layer-info"><div class="layer-name">Satellite Imagery</div><div class="layer-desc">ESRI World Imagery</div></div><div class="layer-toggle"></div></div>
-        <div class="layer-card active" data-layer="traffic" onclick="toggleLayer(this,'traffic')"><div class="layer-icon">🚗</div><div class="layer-info"><div class="layer-name">Roads</div><div class="layer-desc">OpenStreetMap</div></div><div class="layer-toggle"></div></div>
+        <div class="layer-card" data-layer="traffic" onclick="toggleLayer(this,'traffic')"><div class="layer-icon">🚗</div><div class="layer-info"><div class="layer-name">Roads</div><div class="layer-desc">OpenStreetMap</div></div><div class="layer-toggle"></div></div>
       </div>
 
     </div>
@@ -203,7 +203,7 @@ html,body{height:100%;overflow:hidden;font-family:'DM Sans',sans-serif;backgroun
 <script>
 /* ===== GLOBALS ===== */
 var map,userLat=30.25,userLon=120.16;
-var activeLayers=new Set(['precipitation','traffic']);
+var activeLayers=new Set(['precipitation']);
 var ML={},canvasLayers={};
 var weatherGrid=null,weatherCenter=null,marineGrid=null,tideData=null;
 var coastFeatures=null,rainPath=null,aqGrid=null,pollenData=null;
@@ -558,17 +558,7 @@ function drawDrought(ctx,c,m){if(!weatherGrid)return;var idx=getNowHourIdx();var
 function aqColor(v){if(v==null)return[0,0,0,0];if(v<=25)return[52,211,153,35];if(v<=50)return[52,211,153,50];if(v<=75)return[251,191,36,50];if(v<=100)return[251,191,36,65];if(v<=150)return[249,115,22,65];if(v<=200)return[239,68,68,75];return[168,85,247,80];}
 function drawAQ(ctx,c,m){if(!aqGrid)return;var idx=0;if(aqGrid.data[0]&&aqGrid.data[0].hourly&&aqGrid.data[0].hourly.time)idx=findNowIdx(aqGrid.data[0].hourly.time);renderHiRes(ctx,c,m,function(lat,lon){return aqColor(aqInterp('us_aqi',idx,lat,lon));});}
 
-/* ===== DRAW: TIDE — clear heatmap + labels ===== */
-function tideHeatColor(wh,minH,maxH){
-  // Green (calm) → Yellow (moderate) → Red (rough) → Magenta (extreme)
-  if(maxH<=minH)return{r:56,g:189,b:248,a:.6};
-  var n=(wh-minH)/(maxH-minH);n=Math.max(0,Math.min(1,n));
-  var r,g,b;
-  if(n<.33){var f=n/.33;r=52+152*f;g=211-65*f;b=153-113*f;}      // green→yellow
-  else if(n<.66){var f=(n-.33)/.33;r=204+35*f;g=146-78*f;b=40-10*f;} // yellow→red
-  else{var f=(n-.66)/.34;r=239;g=68-20*f;b=30+170*f;}               // red→magenta
-  return{r:Math.round(r),g:Math.round(g),b:Math.round(b),a:.45+n*.4};
-}
+/* ===== DRAW: TIDE — geomap-10 style (teal animated waves) + MIN/MAX/HERE markers ===== */
 
 function drawTideFrame(ctx,c,m){
   if(!coastFeatures||!coastFeatures.features||!coastFeatures.features.length){
@@ -581,94 +571,189 @@ function drawTideFrame(ctx,c,m){
   var timeIdx=getMarineNowIdx();
   var t=Date.now()/1000;
   var bounds=m.getBounds();
-  var pad=.05,sth=bounds.getSouth()-(bounds.getNorth()-bounds.getSouth())*pad,nth=bounds.getNorth()+(bounds.getNorth()-bounds.getSouth())*pad;
-  var wst=bounds.getWest()-(bounds.getEast()-bounds.getWest())*pad,est=bounds.getEast()+(bounds.getEast()-bounds.getWest())*pad;
+  var pL=(bounds.getNorth()-bounds.getSouth())*.05,pO=(bounds.getEast()-bounds.getWest())*.05;
+  var sth=bounds.getSouth()-pL,nth=bounds.getNorth()+pL,wst=bounds.getWest()-pO,est=bounds.getEast()+pO;
 
-  // Phase 1: collect all visible segments with per-point wave heights
-  var allSegs=[];var globalMin=999,globalMax=0;
+  // Read wave period for animation speed
+  var wavePer=6;
+  if(tideData&&tideData.current&&tideData.current.wave_period){wavePer=tideData.current.wave_period||6;}
+
+  // ── Phase 1: collect segments + track global min/max/nearest ──
+  var allSegs=[],gMin=999,gMax=0,gMinPt=null,gMaxPt=null,gMinWh=0,gMaxWh=0;
+  var nearestPt=null,nearestDist=Infinity,nearestWh=0,nearestNm=[0,-1];
+  var userPx=m.latLngToContainerPoint([userLat,userLon]);
 
   for(var fi=0;fi<coastFeatures.features.length;fi++){
     var geom=coastFeatures.features[fi].geometry;if(!geom)continue;
     var coordSets=geom.type==='MultiLineString'?geom.coordinates:(geom.type==='LineString'?[geom.coordinates]:(geom.type==='Polygon'?geom.coordinates:[]));
     for(var si=0;si<coordSets.length;si++){
-      var coords=coordSets[si],seg={pts:[],lls:[],whs:[]};
+      var coords=coordSets[si],seg={pts:[],whs:[],dists:[0]};
       for(var ci=0;ci<coords.length;ci++){
         var cLon=coords[ci][0],cLat=coords[ci][1];
         if(cLat<sth||cLat>nth||cLon<wst||cLon>est){
-          if(seg.pts.length>1){allSegs.push(seg);}seg={pts:[],lls:[],whs:[]};continue;
+          if(seg.pts.length>1)allSegs.push(seg);
+          seg={pts:[],whs:[],dists:[0]};continue;
         }
         var pt=m.latLngToContainerPoint([cLat,cLon]);
         var wh=marineInterp('wave_height',timeIdx,cLat,cLon);
         if(wh==null&&tideData&&tideData.current)wh=tideData.current.wave_height||0;
         if(wh==null)wh=0;
-        if(wh<globalMin)globalMin=wh;if(wh>globalMax)globalMax=wh;
-        seg.pts.push(pt);seg.lls.push([cLat,cLon]);seg.whs.push(wh);
+        if(seg.pts.length>0){
+          var prev=seg.pts[seg.pts.length-1];
+          seg.dists.push(seg.dists[seg.dists.length-1]+Math.sqrt((pt.x-prev.x)*(pt.x-prev.x)+(pt.y-prev.y)*(pt.y-prev.y)));
+        }
+        seg.pts.push(pt);seg.whs.push(wh);
+        if(wh<gMin){gMin=wh;gMinPt=pt;gMinWh=wh;}
+        if(wh>gMax){gMax=wh;gMaxPt=pt;gMaxWh=wh;}
+        var ud=(pt.x-userPx.x)*(pt.x-userPx.x)+(pt.y-userPx.y)*(pt.y-userPx.y);
+        if(ud<nearestDist){nearestDist=ud;nearestPt=pt;nearestWh=wh;nearestNm=tideNrm(seg.pts,seg.pts.length-1);}
       }
       if(seg.pts.length>1)allSegs.push(seg);
     }
   }
   if(allSegs.length===0)return;
-  if(globalMin>=globalMax){globalMin=0;globalMax=Math.max(globalMax,1);}
+  var maxWave=4; // normalization reference (0-4m)
 
-  // Phase 2: draw each segment
+  // ── Phase 2: draw each segment in geomap-10 style ──
   for(var si=0;si<allSegs.length;si++){
-    var seg=allSegs[si],pts=seg.pts,whs=seg.whs;
-    var dists=[0];
-    for(var i=1;i<pts.length;i++)dists.push(dists[i-1]+Math.sqrt((pts[i].x-pts[i-1].x)*(pts[i].x-pts[i-1].x)+(pts[i].y-pts[i-1].y)*(pts[i].y-pts[i-1].y)));
-    if(dists[dists.length-1]<3)continue;
+    var seg=allSegs[si],pts=seg.pts,whs=seg.whs,dists=seg.dists;
+    var totalLen=dists[dists.length-1];if(totalLen<4)continue;
 
-    // Draw colored coastline
+    // A) Animated wave dots — 3 passes per point (the signature geomap-10 effect)
+    for(var i=0;i<pts.length;i++){
+      var wh=whs[i];
+      var norm=Math.min(1,wh/maxWave);
+      var reach=8+norm*35;
+      var nm=tideNrm(pts,i);
+      var r=Math.round(14+norm*40),g=Math.round(100+norm*80),b2=Math.round(180+norm*60);
+
+      for(var pass=0;pass<3;pass++){
+        var off=reach*(0.3+pass*0.35);
+        var phase=dists[i]*0.05+t/wavePer*2+pass*0.7;
+        var osc=Math.sin(phase)*(2+norm*10)+Math.sin(phase*2.3+t*.5)*1.5;
+        var px=pts[i].x+nm[0]*(off+osc);
+        var py=pts[i].y+nm[1]*(off+osc);
+        ctx.beginPath();ctx.arc(px,py,1.5+norm*2,0,Math.PI*2);
+        ctx.fillStyle='rgba('+r+','+g+','+b2+','+(0.08+pass*0.04+norm*0.08)+')';
+        ctx.fill();
+      }
+    }
+
+    // B) Coastline stroke — teal tones colored by wave height
     for(var i=0;i<pts.length-1;i++){
       var wh=(whs[i]+whs[i+1])/2;
-      var col=tideHeatColor(wh,globalMin,globalMax);
-      var norm=(wh-globalMin)/(globalMax-globalMin||1);
+      var norm=Math.min(1,wh/maxWave);
       ctx.beginPath();ctx.moveTo(pts[i].x,pts[i].y);ctx.lineTo(pts[i+1].x,pts[i+1].y);
-      ctx.strokeStyle='rgba('+col.r+','+col.g+','+col.b+','+col.a+')';
-      ctx.lineWidth=2+norm*4;ctx.lineCap='round';ctx.stroke();
+      var cr=Math.round(40+norm*200),cg=Math.round(180+norm*55),cb=Math.round(200+norm*55);
+      ctx.strokeStyle='rgba('+cr+','+cg+','+cb+','+(0.3+norm*0.5)+')';
+      ctx.lineWidth=1.5+norm*2;ctx.lineCap='round';ctx.stroke();
     }
 
-    // Animated wave glow
-    for(var i=0;i<pts.length;i++){
-      var wh=whs[i],norm=(wh-globalMin)/(globalMax-globalMin||1);
-      var nm=tideNrm(pts,i);
-      var reach=6+norm*25;
-      var phase=dists[i]*.06+t/6*2;
-      var osc=Math.sin(phase)*(2+norm*8);
-      var px=pts[i].x+nm[0]*(reach+osc),py=pts[i].y+nm[1]*(reach+osc);
-      var col=tideHeatColor(wh,globalMin,globalMax);
-      ctx.beginPath();ctx.arc(px,py,1+norm*2.5,0,Math.PI*2);
-      ctx.fillStyle='rgba('+col.r+','+col.g+','+col.b+','+(col.a*.4)+')';ctx.fill();
-    }
-
-    // Labels every ~250px
-    var nextL=120;var segMinI=0,segMaxI=0;
-    for(var i=1;i<whs.length;i++){if(whs[i]<whs[segMinI])segMinI=i;if(whs[i]>whs[segMaxI])segMaxI=i;}
-
-    for(var i=1;i<pts.length;i++){
-      if(dists[i]<nextL&&i!==segMinI&&i!==segMaxI)continue;
-      var wh=whs[i];var nm=tideNrm(pts,i);
-      var norm=(wh-globalMin)/(globalMax-globalMin||1);
-      var col=tideHeatColor(wh,globalMin,globalMax);
-      var isMin=(i===segMinI&&dists[dists.length-1]>80);
-      var isMax=(i===segMaxI&&dists[dists.length-1]>80);
-      var lx=pts[i].x+nm[0]*(10+norm*28+18),ly=pts[i].y+nm[1]*(10+norm*28+18);
-
-      var label=wh.toFixed(1)+'m';
-      var tag=isMin?'▾ LOW':isMax?'▴ HIGH':(norm>.66?'▴':norm<.33?'▾':'');
-
-      ctx.save();ctx.font=(isMin||isMax?'bold ':'')+'9px "JetBrains Mono",monospace';
-      var tw=ctx.measureText(label+' '+tag).width+10;
-      ctx.fillStyle=isMin?'rgba(0,40,20,.75)':isMax?'rgba(60,0,0,.75)':'rgba(0,15,40,.7)';
+    // C) Wave crest animation lines — flowing white lines
+    for(var w=0;w<2;w++){
       ctx.beginPath();
-      if(ctx.roundRect)ctx.roundRect(lx-tw/2,ly-9,tw,18,5);else ctx.rect(lx-tw/2,ly-9,tw,18);
+      for(var i=0;i<pts.length;i++){
+        var wh=whs[i];var norm=Math.min(1,wh/maxWave);
+        var nm=tideNrm(pts,i);
+        var off=(8+norm*30)*(0.4+w*0.35);
+        var phase=dists[i]*0.05+t/6*2.5+w*1.2;
+        var osc=Math.sin(phase)*(2+norm*8);
+        var px=pts[i].x+nm[0]*(off+osc),py=pts[i].y+nm[1]*(off+osc);
+        i===0?ctx.moveTo(px,py):ctx.lineTo(px,py);
+      }
+      ctx.strokeStyle='rgba(200,240,255,'+(0.12+w*0.06)+')';
+      ctx.lineWidth=1;ctx.lineCap='round';ctx.stroke();
+    }
+
+    // D) Height labels every ~300px
+    var nextLabel=150;
+    for(var i=1;i<pts.length;i++){
+      if(dists[i]<nextLabel)continue;
+      var wh=whs[i];var norm=Math.min(1,wh/maxWave);
+      var nm=tideNrm(pts,i);
+      var lx=pts[i].x+nm[0]*(15+norm*35+16),ly=pts[i].y+nm[1]*(15+norm*35+16);
+      var label=wh.toFixed(1)+'m';
+      ctx.save();ctx.font='bold 9px "JetBrains Mono",monospace';
+      var tw=ctx.measureText(label).width+8;
+      ctx.fillStyle='rgba(0,15,40,0.7)';
+      ctx.beginPath();
+      if(ctx.roundRect)ctx.roundRect(lx-tw/2,ly-8,tw,16,4);else ctx.rect(lx-tw/2,ly-8,tw,16);
       ctx.fill();
-      if(isMin||isMax){ctx.strokeStyle='rgba('+col.r+','+col.g+','+col.b+',.6)';ctx.lineWidth=1;ctx.stroke();}
-      ctx.fillStyle='rgba('+col.r+','+col.g+','+col.b+','+(isMin||isMax?1:.85)+')';
-      ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(label+' '+tag,lx,ly);
-      ctx.restore();
-      nextL=dists[i]+250;
+      ctx.fillStyle=wh>2?'rgba(56,189,248,0.95)':wh>0.8?'rgba(120,200,230,0.85)':'rgba(100,170,200,0.75)';
+      ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(label,lx,ly);
+      ctx.restore();nextLabel=dists[i]+300;
     }
   }
+
+  // ── Phase 3: prominent MIN / MAX / HERE callout markers ──
+  // These are drawn LAST so they appear on top of everything
+
+  if(gMinPt){
+    var nm=findBestNormal(allSegs,gMinPt);
+    var lx=gMinPt.x+nm[0]*55,ly=gMinPt.y+nm[1]*55;
+    // Dashed connector line
+    ctx.save();ctx.beginPath();ctx.moveTo(gMinPt.x,gMinPt.y);ctx.lineTo(lx,ly);
+    ctx.strokeStyle='rgba(100,200,180,.45)';ctx.lineWidth=1;ctx.setLineDash([4,4]);ctx.stroke();ctx.setLineDash([]);ctx.restore();
+    // Dot on coastline
+    ctx.beginPath();ctx.arc(gMinPt.x,gMinPt.y,5,0,Math.PI*2);
+    ctx.fillStyle='rgba(52,211,153,.9)';ctx.fill();ctx.strokeStyle='#fff';ctx.lineWidth=1.5;ctx.stroke();
+    // Label pill
+    drawTideCallout(ctx,lx,ly,'▼ LOW  '+gMinWh.toFixed(1)+'m','rgba(10,50,35,.88)','rgba(52,211,153,.65)','rgba(52,211,153,1)');
+  }
+
+  if(gMaxPt){
+    var nm=findBestNormal(allSegs,gMaxPt);
+    var lx=gMaxPt.x+nm[0]*55,ly=gMaxPt.y+nm[1]*55;
+    ctx.save();ctx.beginPath();ctx.moveTo(gMaxPt.x,gMaxPt.y);ctx.lineTo(lx,ly);
+    ctx.strokeStyle='rgba(248,150,100,.45)';ctx.lineWidth=1;ctx.setLineDash([4,4]);ctx.stroke();ctx.setLineDash([]);ctx.restore();
+    ctx.beginPath();ctx.arc(gMaxPt.x,gMaxPt.y,5,0,Math.PI*2);
+    ctx.fillStyle='rgba(239,68,68,.9)';ctx.fill();ctx.strokeStyle='#fff';ctx.lineWidth=1.5;ctx.stroke();
+    drawTideCallout(ctx,lx,ly,'▲ HIGH  '+gMaxWh.toFixed(1)+'m','rgba(60,15,10,.88)','rgba(239,68,68,.6)','rgba(248,150,100,1)');
+  }
+
+  if(nearestPt&&nearestDist<200*200){
+    var nm=findBestNormal(allSegs,nearestPt);
+    var lx=nearestPt.x-nm[0]*55,ly=nearestPt.y-nm[1]*55;
+    ctx.save();ctx.beginPath();ctx.moveTo(nearestPt.x,nearestPt.y);ctx.lineTo(lx,ly);
+    ctx.strokeStyle='rgba(56,189,248,.4)';ctx.lineWidth=1;ctx.setLineDash([4,4]);ctx.stroke();ctx.setLineDash([]);ctx.restore();
+    ctx.beginPath();ctx.arc(nearestPt.x,nearestPt.y,5,0,Math.PI*2);
+    ctx.fillStyle='rgba(56,189,248,.9)';ctx.fill();ctx.strokeStyle='#fff';ctx.lineWidth=1.5;ctx.stroke();
+    drawTideCallout(ctx,lx,ly,'📍 HERE  '+nearestWh.toFixed(1)+'m','rgba(10,25,55,.88)','rgba(56,189,248,.55)','rgba(56,189,248,1)');
+  }
+}
+
+function drawTideCallout(ctx,x,y,text,bgColor,borderColor,textColor){
+  ctx.save();
+  ctx.font='bold 11px "JetBrains Mono",monospace';
+  var tw=ctx.measureText(text).width+14;
+  var th=24;
+  // Shadow
+  ctx.shadowColor='rgba(0,0,0,.4)';ctx.shadowBlur=8;ctx.shadowOffsetY=2;
+  // Background pill
+  ctx.fillStyle=bgColor;
+  ctx.beginPath();
+  if(ctx.roundRect)ctx.roundRect(x-tw/2,y-th/2,tw,th,th/2);else ctx.rect(x-tw/2,y-th/2,tw,th);
+  ctx.fill();
+  ctx.shadowColor='transparent';
+  // Border
+  ctx.strokeStyle=borderColor;ctx.lineWidth=1.5;ctx.stroke();
+  // Text
+  ctx.fillStyle=textColor;
+  ctx.textAlign='center';ctx.textBaseline='middle';
+  ctx.fillText(text,x,y);
+  ctx.restore();
+}
+
+function findBestNormal(allSegs,pt){
+  var bestD=Infinity,bestNm=[0,-1];
+  for(var si=0;si<allSegs.length;si++){
+    var pts=allSegs[si].pts;
+    for(var i=0;i<pts.length;i++){
+      var d=(pts[i].x-pt.x)*(pts[i].x-pt.x)+(pts[i].y-pt.y)*(pts[i].y-pt.y);
+      if(d<bestD){bestD=d;bestNm=tideNrm(pts,i);}
+    }
+  }
+  return bestNm;
 }
 function tideNrm(pts,i){var dx=0,dy=0;if(i<pts.length-1){dx=pts[i+1].x-pts[i].x;dy=pts[i+1].y-pts[i].y;}else if(i>0){dx=pts[i].x-pts[i-1].x;dy=pts[i].y-pts[i-1].y;}var l=Math.sqrt(dx*dx+dy*dy)||1;return[-dy/l,dx/l];}
 
@@ -686,8 +771,8 @@ function renderInfoPanel(){
 
   // Wind
   var ws=cur.wind_speed_10m,wd=cur.wind_direction_10m;
-  var wPct=windStats.max>0?(ws/windStats.max*100):0;wPct=Math.min(100,wPct);var wC=ws<15?'#34d399':ws<35?'#facc15':'#ef4444';
-  cards+='<div class="info-card"><div class="info-card-title"><i class="ic">🌬️</i> Wind</div><div class="info-val-row"><div class="info-val">'+(ws!=null?ws.toFixed(1):'--')+'<span class="unit">km/h</span></div><div class="info-sub">'+(wd!=null?degToDir(wd):'-')+'</div></div><div class="info-row"><div class="info-metric"><div class="info-metric-label">Dir</div><div class="info-metric-val">'+(wd!=null?wd+'°':'-')+'</div></div><div class="info-metric"><div class="info-metric-label">Bft</div><div class="info-metric-val">'+(ws!=null?beaufort(ws):'-')+'</div></div></div></div>';
+  var wPct=windStats.max>0?(ws/windStats.max*100):0;wPct=Math.max(0,Math.min(100,wPct));var wC=ws<15?'#34d399':ws<35?'#facc15':'#ef4444';
+  cards+='<div class="info-card"><div class="info-card-title"><i class="ic">🌬️</i> Wind</div><div class="info-val-row"><div class="info-val">'+(ws!=null?ws.toFixed(1):'--')+'<span class="unit">km/h</span></div><div class="info-sub">'+(wd!=null?degToDir(wd):'-')+'</div></div><div class="info-row"><div class="info-metric"><div class="info-metric-label">Dir</div><div class="info-metric-val">'+(wd!=null?wd+'°':'-')+'</div></div><div class="info-metric"><div class="info-metric-label">Bft</div><div class="info-metric-val">'+(ws!=null?beaufort(ws):'-')+'</div></div></div><div class="mini-bar-wrap"><div class="mini-bar-labels"><span>0</span><span>3d max</span><span>'+windStats.max.toFixed(0)+'</span></div><div class="mini-bar" style="background:linear-gradient(to right,#34d399,#facc15,#ef4444)"><div class="mini-bar-dot" style="left:'+wPct+'%;background:'+wC+'"></div></div></div></div>';
 
   // Tide (if active and available)
   if(activeLayers.has('tide')&&tideData&&tideData.current){
@@ -724,7 +809,7 @@ function updateLegend(){
   if(activeLayers.has('temperature')){show=true;html+='<h4>Temperature</h4><div class="legend-gradient" style="background:linear-gradient(to right,#1428b4,#3b82f6,#22d3ee,#34d399,#facc15,#f97316,#ef4444)"></div><div class="legend-labels"><span>-10°C</span><span>35+</span></div>';}
   if(activeLayers.has('drought')){show=true;html+='<h4 style="margin-top:8px">Soil Moisture</h4><div class="legend-gradient" style="background:linear-gradient(to right,#b43214,#dca028,#8cb450,#2864c8)"></div><div class="legend-labels"><span>Drought</span><span>Wet</span></div>';}
   if(activeLayers.has('airquality')){show=true;html+='<h4 style="margin-top:8px">AQI</h4><div style="display:flex;gap:2px;margin:3px 0"><div style="flex:1;height:6px;border-radius:2px;background:#34d399"></div><div style="flex:1;height:6px;border-radius:2px;background:#fbbf24"></div><div style="flex:1;height:6px;border-radius:2px;background:#f97316"></div><div style="flex:1;height:6px;border-radius:2px;background:#ef4444"></div><div style="flex:1;height:6px;border-radius:2px;background:#a855f7"></div></div><div class="legend-labels"><span>Good</span><span>Hazardous</span></div>';}
-  if(activeLayers.has('tide')){show=true;html+='<h4 style="margin-top:8px">Wave Height</h4><div class="legend-gradient" style="background:linear-gradient(to right,#34d399,#dca028,#ef4444,#c084fc)"></div><div class="legend-labels"><span>▾ Calm</span><span>▴ Rough</span></div>';}
+  if(activeLayers.has('tide')){show=true;html+='<h4 style="margin-top:8px">Wave Height</h4><div class="legend-gradient" style="background:linear-gradient(to right,rgba(100,170,200,.5),rgba(56,189,248,.9))"></div><div class="legend-labels"><span>Calm</span><span>Rough</span></div><div style="margin-top:6px;font-size:9px;line-height:1.6"><span style="color:#34d399">▼ LOW</span> calmest point<br><span style="color:#f87171">▲ HIGH</span> roughest point<br><span style="color:#38bdf8">📍 HERE</span> nearest to you</div><div class="legend-src">Marine 5×5 · Open-Meteo</div>';}
   if(activeLayers.has('sst')){show=true;html+='<h4 style="margin-top:8px">Sea Temp</h4><div class="legend-gradient" style="background:linear-gradient(to right,#1e3a8a,#22d3ee,#facc15,#ef4444)"></div><div class="legend-labels"><span>Cold</span><span>Warm</span></div><div class="legend-src">GHRSST MUR GIBS</div>';}
   if(activeLayers.has('seamark')){show=true;html+='<h4 style="margin-top:8px">Sea Marks</h4><div class="legend-src">OpenSeaMap — zoom 9+</div>';}
   if(activeLayers.has('fire')){show=true;html+='<h4 style="margin-top:8px">Fires</h4><div class="legend-item"><div class="legend-color" style="background:#ff4500"></div><span>Thermal anomaly</span></div>';}
@@ -838,7 +923,7 @@ async function init(){
   L.control.zoom({position:'bottomright'}).addTo(map);
   ML.dark=L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{maxZoom:19,subdomains:'abcd'}).addTo(map);
   ML.satellite=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{maxZoom:18,opacity:.85});
-  ML.traffic=L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,opacity:.35}).addTo(map);
+  ML.traffic=L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,opacity:.35});
 
   // User marker
   var uI=L.divIcon({className:'',html:'<div class="user-marker"><div class="user-marker-ring"></div></div>',iconSize:[18,18],iconAnchor:[9,9]});
