@@ -161,6 +161,12 @@ Ideas for new layers: ocean currents, lightning, UV index, snow cover, real-time
 
 ---
 
+## 🌟 Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=EncyclopediaWorld/geolive&type=Date)](https://star-history.com/#EncyclopediaWorld/geolive&Date)
+
+---
+
 ## 📄 License
 
 Code: [Apache 2.0](https://www.apache.org/licenses/LICENSE-2.0) — Content & visualizations: [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)
